@@ -1,8 +1,3 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-export default defineConfig({
-  plugins: [react()],
-  build: {
-    charset: 'utf8'
-  }
-})
+export default defineConfig({ plugins: [react()] })
