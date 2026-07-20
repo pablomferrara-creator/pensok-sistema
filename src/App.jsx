@@ -1595,13 +1595,10 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
         const cW=W-PL-PR, cH=H-PT-PB;
         const maxVal=Math.max(...puntos.map(p=>p.valor), meta*1.15, 1);
 
-        const xPos=(i)=>PL + (i/(puntos.length-1||1))*cW;
+        const bandW = cW/puntos.length;
+        const xPos=(i)=>PL + bandW*(i+0.5); // centro de banda (usado para labels y barras)
         const yPos=(v)=>PT + cH - Math.min(v/maxVal,1)*cH;
         const metaY = meta>0 ? yPos(meta) : -999;
-
-        const pts = puntos.map((p,i)=>`${xPos(i)},${yPos(p.valor)}`).join(" ");
-        const areaAbajo = puntos.map((p,i)=>`${xPos(i)},${yPos(p.valor)}`).join(" ")
-          + ` ${xPos(puntos.length-1)},${PT+cH} ${xPos(0)},${PT+cH}`;
 
         const gridVals=[0,0.25,0.5,0.75,1].map(f=>Math.round(maxVal*f));
         const fmtY=v=>v>=1000000?"$"+(v/1000000).toFixed(1)+"M":v>=1000?"$"+(v/1000).toFixed(0)+"k":"$"+v;
@@ -1612,28 +1609,11 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
               <ST style={{margin:0}}>Evolución de facturación — {labelPeriodo}</ST>
               <div style={{display:"flex",gap:16,fontSize:11,color:G.textoSec,alignItems:"center"}}>
                 {meta>0&&<span style={{color:G.verde}}>┄ Objetivo: {fmt(Math.round(meta))}</span>}
-                <span style={{color:G.verde}}>━ Facturación</span>
+                <span style={{color:G.verde}}>■ Facturación</span>
               </div>
             </div>
             <div style={{overflowX:"auto"}}>
               <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:320,height:H,display:"block"}}>
-                <defs>
-                  <clipPath id="clipGrafAbove">
-                    <rect x={PL} y={PT} width={cW} height={Math.max(metaY-PT,0)}/>
-                  </clipPath>
-                  <clipPath id="clipGrafBelow">
-                    <rect x={PL} y={Math.max(metaY,PT)} width={cW} height={PT+cH-Math.max(metaY,PT)}/>
-                  </clipPath>
-                  <linearGradient id="gradGV" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#00C48C" stopOpacity="0.4"/>
-                    <stop offset="100%" stopColor="#00C48C" stopOpacity="0.03"/>
-                  </linearGradient>
-                  <linearGradient id="gradGR" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#FF4D6A" stopOpacity="0.3"/>
-                    <stop offset="100%" stopColor="#FF4D6A" stopOpacity="0.03"/>
-                  </linearGradient>
-                </defs>
-
                 {/* Grilla Y */}
                 {gridVals.map((v,i)=>(
                   <g key={i}>
@@ -1642,39 +1622,25 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
                   </g>
                 ))}
 
-                {/* Área verde (sobre meta) */}
-                {meta>0
-                  ? <polygon points={areaAbajo} fill="url(#gradGV)" clipPath="url(#clipGrafAbove)"/>
-                  : <polygon points={areaAbajo} fill="url(#gradGV)"/>
-                }
-
-                {/* Área roja (bajo meta) */}
-                {meta>0&&(
-                  <polygon points={areaAbajo} fill="url(#gradGR)" clipPath="url(#clipGrafBelow)"/>
-                )}
-
                 {/* Línea objetivo punteada verde */}
                 {meta>0&&metaY>PT&&metaY<PT+cH&&(
                   <line x1={PL} y1={metaY} x2={W-PR} y2={metaY}
                     stroke={G.verde} strokeWidth="1.5" strokeDasharray="7,4" opacity="0.8"/>
                 )}
 
-                {/* Línea de facturación */}
-                <polyline points={pts} fill="none" stroke={G.verde} strokeWidth="2.5"
-                  strokeLinejoin="round" strokeLinecap="round"/>
-
-                {/* Puntos coloreados */}
+                {/* Barras de facturación */}
                 {puntos.map((p,i)=>{
-                  const x=xPos(i); const y=yPos(p.valor);
+                  const barW = Math.max(bandW*0.55, 2);
+                  const x = xPos(i) - barW/2;
+                  const y = yPos(p.valor);
+                  const h = Math.max(PT+cH-y, p.valor>0?1:0);
                   const col = meta>0
                     ? (p.valor>=meta ? G.verde : p.valor>=meta*0.7 ? G.amarillo : G.rojo)
                     : G.verde;
                   return(
-                    <g key={i}>
-                      <circle cx={x} cy={y} r="4" fill={col} stroke={G.fondo} strokeWidth="1.5">
-                        <title>{p.label}: {fmt(p.valor)}{meta>0?" · Objetivo: "+fmt(Math.round(meta)):""}</title>
-                      </circle>
-                    </g>
+                    <rect key={i} x={x} y={y} width={barW} height={h} fill={col} rx="2" opacity="0.9">
+                      <title>{p.label}: {fmt(p.valor)}{meta>0?" · Objetivo: "+fmt(Math.round(meta)):""}</title>
+                    </rect>
                   );
                 })}
 
