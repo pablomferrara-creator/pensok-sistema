@@ -295,6 +295,7 @@ function useData(toast){
   const [pagosEgreso,    setPagosEgreso]    = useState([]);
   const [tareas,         setTareas]         = useState([]);
   const [vendedoresOtro, setVendedoresOtro] = useState([]); // vendedores del OTRO local (para la lista de responsables)
+  const [conteosStock,   setConteosStock]   = useState([]);
   const [loading,        setLoading]        = useState(true);
 
   async function cargar(){
@@ -326,6 +327,11 @@ function useData(toast){
       const{data:vOtro}=await supabaseOtro.from("vendedores").select("*").eq("activo",true);
       setVendedoresOtro(vOtro||[]);
     }catch(e){ console.warn("No se pudieron cargar los vendedores del otro local:",e); setVendedoresOtro([]); }
+    // Conteos de stock (control de inventario) — si la tabla aún no existe, queda vacío sin romper
+    try{
+      const{data:cst}=await supabase.from("conteos_stock").select("*, conteos_stock_items(*)").order("creado_en",{ascending:false});
+      setConteosStock(cst||[]);
+    }catch(e){ console.warn("No se pudieron cargar los conteos de stock:",e); setConteosStock([]); }
     // Count real de ventas
     const{count}=await supabase.from("ventas").select("*",{count:"exact",head:true});
     setTotalVentas(count||0);
@@ -1272,6 +1278,41 @@ function useData(toast){
     return () => clearInterval(interval);
   },[loading]);
 
+  // ── CONTROL DE STOCK (conteo físico + ajuste) ───────────────
+  // items: [{id, codigo, nombre, stock (stock de sistema al momento de contar), contado}]
+  async function crearConteoStock({categoria,responsable,items}){
+    const{data:conteo,error}=await supabase.from("conteos_stock").insert({
+      categoria, responsable, fecha:hoy()
+    }).select().single();
+    if(error){ console.error("Error creando conteo de stock:",error); toast.err("Error al guardar el conteo"); return false; }
+
+    const filas = items.map(it=>({
+      conteo_id:conteo.id, producto_id:it.id, codigo:it.codigo||"", nombre:it.nombre,
+      stock_sistema:it.stock||0, stock_contado:it.contado
+    }));
+    const{error:errItems}=await supabase.from("conteos_stock_items").insert(filas);
+    if(errItems){ console.error("Error guardando items del conteo:",errItems); toast.err("Error al guardar el detalle del conteo"); return false; }
+
+    toast.ok(`Conteo de "${categoria}" guardado — ${items.length} productos`);
+    await cargar();
+    return true;
+  }
+
+  // Pisa productos.stock con lo contado en este conteo puntual, y lo marca como aplicado.
+  async function aplicarConteoStock(conteoId,aplicadoPor){
+    const conteo = conteosStock.find(c=>c.id===conteoId);
+    if(!conteo) return;
+    for(const item of (conteo.conteos_stock_items||[])){
+      await supabase.from("productos").update({stock:item.stock_contado}).eq("id",item.producto_id);
+    }
+    const{error}=await supabase.from("conteos_stock").update({
+      aplicado:true, aplicado_en:new Date().toISOString(), aplicado_por:aplicadoPor
+    }).eq("id",conteoId);
+    if(error){ console.error("Error marcando conteo como aplicado:",error); toast.err("Se ajustó el stock pero no se pudo marcar el conteo como aplicado"); await cargar(); return; }
+    toast.ok("Ajuste de stock aplicado");
+    await cargar();
+  }
+
   // Lista fija de responsables: unión de los vendedores activos de AMBOS locales, sin repetir.
   // Las tareas son compartidas, así que una tarea de Pilar puede asignarse a alguien de Caamaño.
   const responsables = useMemo(()=>{
@@ -1286,7 +1327,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock};
 }
 
 // ============================================================
@@ -6590,6 +6631,182 @@ function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[]
 }
 
 // ============================================================
+// MODULO: CONTROL DE STOCK (conteo físico por categoría + ajuste)
+// Cualquier usuario puede registrar un conteo (queda histórico, no toca productos.stock).
+// Solo esAdmin puede "aplicar" un conteo puntual, lo que sí pisa productos.stock.
+// ============================================================
+function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,vendedores=[],vendedoresOtro=[],esAdmin=true,usuarioEmail=""}){
+  // Nombre del vendedor asociado al usuario logueado (cruzando por email en ambos locales) — mismo patrón que ModuloTareas.
+  const miNombre = useMemo(()=>{
+    const email=(usuarioEmail||"").trim().toLowerCase();
+    if(!email) return "";
+    const todos=[...(vendedores||[]),...(vendedoresOtro||[])];
+    const match=todos.find(v=>(v.email||"").trim().toLowerCase()===email);
+    return match?.nombre || "";
+  },[vendedores,vendedoresOtro,usuarioEmail]);
+  const responsableActual = miNombre || usuarioEmail || "—";
+
+  const [vista,setVista]           = useState("historial"); // historial | nuevo
+  const [categoriaSel,setCategoriaSel] = useState("");
+  const [valores,setValores]       = useState({}); // producto_id -> string cargado
+  const [respSel,setRespSel]       = useState(""); // responsable del conteo, elegido de la lista de vendedores
+  const [guardando,setGuardando]   = useState(false);
+  const [verConteo,setVerConteo]   = useState(null); // conteo abierto en el modal de detalle/aplicar
+  const [aplicando,setAplicando]   = useState(false);
+
+  // Precargar el responsable con el nombre del usuario logueado (si matchea), pero queda editable.
+  useEffect(()=>{ if(!respSel && miNombre) setRespSel(miNombre); },[miNombre]);
+
+  const productosCategoria = useMemo(()=>
+    productos.filter(p=>p.activo&&p.categoria===categoriaSel).sort((a,b)=>a.nombre.localeCompare(b.nombre))
+  ,[productos,categoriaSel]);
+
+  function iniciarCategoria(cat){ setCategoriaSel(cat); setValores({}); }
+
+  const faltantes    = productosCategoria.filter(p=>valores[p.id]===undefined||valores[p.id]==="").length;
+  const puedeGuardar = categoriaSel && productosCategoria.length>0 && faltantes===0 && respSel;
+
+  async function guardarConteo(){
+    if(!puedeGuardar) return;
+    setGuardando(true);
+    const items = productosCategoria.map(p=>({id:p.id,codigo:p.codigo,nombre:p.nombre,stock:p.stock,contado:parseInt(valores[p.id])||0}));
+    const ok = await onCrear({categoria:categoriaSel,responsable:respSel,items});
+    setGuardando(false);
+    if(ok){ setCategoriaSel(""); setValores({}); setVista("historial"); }
+  }
+
+  async function confirmarAplicar(){
+    if(!verConteo) return;
+    setAplicando(true);
+    await onAplicar(verConteo.id,responsableActual);
+    setAplicando(false);
+    setVerConteo(null);
+  }
+
+  const historial = [...conteosStock].sort((a,b)=>new Date(b.creado_en||b.fecha)-new Date(a.creado_en||a.fecha));
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{display:"flex",gap:8}}>
+        <Btn variant={vista==="historial"?"primary":"secondary"} onClick={()=>setVista("historial")}>Historial</Btn>
+        <Btn variant={vista==="nuevo"?"primary":"secondary"}     onClick={()=>setVista("nuevo")}>+ Nuevo conteo</Btn>
+      </div>
+
+      {vista==="nuevo"&&(
+        <Card>
+          <ST>Categoría a contar</ST>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:categoriaSel?16:0}}>
+            {CATEGORIAS.map(c=>(
+              <Btn key={c} small variant={categoriaSel===c?"primary":"secondary"} onClick={()=>iniciarCategoria(c)}>{c}</Btn>
+            ))}
+          </div>
+
+          {categoriaSel&&(
+            <>
+              <Div/>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:14,flexWrap:"wrap",gap:12}}>
+                <div style={{fontSize:13,color:G.textoSec}}>Contando <strong style={{color:G.texto}}>{categoriaSel}</strong> — {productosCategoria.length} productos activos</div>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  {faltantes>0&&<Badge color="amarillo">{faltantes} sin contar</Badge>}
+                  <Fi label="Responsable del control" value={respSel} onChange={setRespSel} options={[{value:"",label:"Elegir..."},...(vendedores||[]).map(v=>({value:v.nombre,label:v.nombre}))]} style={{width:190}}/>
+                </div>
+              </div>
+              {productosCategoria.length===0?(
+                <div style={{textAlign:"center",padding:"32px 0",color:G.textoSec}}>No hay productos activos en esta categoría</div>
+              ):(
+                <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:460,overflowY:"auto"}}>
+                  {productosCategoria.map(p=>(
+                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:G.sup2,borderRadius:8}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.nombre}</div>
+                        <div style={{fontSize:11,color:G.textoSec}}>Código {p.codigo} · Stock sistema: {fmtNum(p.stock)}</div>
+                      </div>
+                      <input type="number" value={valores[p.id]??""} onChange={e=>setValores(v=>({...v,[p.id]:e.target.value}))}
+                        placeholder="0" style={{width:90,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:8,padding:"7px 10px",color:G.texto,fontSize:13,outline:"none",textAlign:"right"}}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Btn full disabled={!puedeGuardar||guardando} onClick={guardarConteo} style={{marginTop:16,padding:"11px 0",fontSize:14}}>
+                {guardando?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:`Guardar conteo de ${categoriaSel||"..."}`}
+              </Btn>
+            </>
+          )}
+        </Card>
+      )}
+
+      {vista==="historial"&&(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {historial.map(c=>{
+            const items = c.conteos_stock_items||[];
+            const diferencias = items.filter(it=>it.stock_contado!==it.stock_sistema).length;
+            return(
+              <Card key={c.id} style={{padding:"12px 18px",cursor:"pointer"}} onClick={()=>setVerConteo(c)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14}}>{c.categoria}</div>
+                    <div style={{fontSize:12,color:G.textoSec,marginTop:2}}>{c.fecha} · {c.responsable} · {items.length} productos{diferencias>0?` · ${diferencias} con diferencia`:""}</div>
+                  </div>
+                  {c.aplicado
+                    ?<Badge color="verde">Aplicado{c.aplicado_por?" · "+c.aplicado_por:""}</Badge>
+                    :<Badge color="amarillo">Pendiente de aplicar</Badge>}
+                </div>
+              </Card>
+            );
+          })}
+          {historial.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>Sin conteos registrados todavía</div>}
+        </div>
+      )}
+
+      {/* Modal detalle / aplicar ajuste */}
+      {verConteo&&(()=>{
+        const items = verConteo.conteos_stock_items||[];
+        const hayCambios = !verConteo.aplicado&&items.some(it=>{
+          const prodAhora=productos.find(p=>p.id===it.producto_id);
+          return prodAhora&&prodAhora.stock!==it.stock_sistema;
+        });
+        return(
+          <Modal title={`Conteo de ${verConteo.categoria} — ${verConteo.fecha}`} onClose={()=>setVerConteo(null)} maxWidth={620}
+            footer={<>
+              <Btn variant="secondary" onClick={()=>setVerConteo(null)}>Cerrar</Btn>
+              {esAdmin&&!verConteo.aplicado&&(
+                <Btn variant="primary" disabled={aplicando} onClick={confirmarAplicar}>
+                  {aplicando?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Aplicando...</span>:"Aplicar ajuste al sistema"}
+                </Btn>
+              )}
+            </>}>
+            <div style={{fontSize:12,color:G.textoSec,marginBottom:10}}>Registrado por <strong style={{color:G.texto}}>{verConteo.responsable}</strong>{verConteo.aplicado?<> · Aplicado por <strong style={{color:G.texto}}>{verConteo.aplicado_por}</strong></>:""}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:1,maxHeight:400,overflowY:"auto"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 90px",gap:8,padding:"6px 8px",fontSize:10,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>
+                <span>Producto</span><span style={{textAlign:"right"}}>Contado</span><span style={{textAlign:"right"}}>Sistema (al contar)</span><span style={{textAlign:"right"}}>Sistema (ahora)</span>
+              </div>
+              {items.map(it=>{
+                const prodAhora = productos.find(p=>p.id===it.producto_id);
+                const stockAhora = prodAhora?prodAhora.stock:it.stock_sistema;
+                const cambioDesdeConteo = stockAhora!==it.stock_sistema;
+                return(
+                  <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 90px",gap:8,padding:"7px 8px",fontSize:12,background:G.sup2,borderRadius:6}}>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</span>
+                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:it.stock_contado!==it.stock_sistema?G.amarillo:G.texto}}>{fmtNum(it.stock_contado)}</span>
+                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:G.textoSec}}>{fmtNum(it.stock_sistema)}</span>
+                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:cambioDesdeConteo?G.rojo:G.textoSec}}>{fmtNum(stockAhora)}{cambioDesdeConteo?" ⚠":""}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {hayCambios&&(
+              <div style={{marginTop:12,padding:"10px 12px",background:"#FF4D6A15",border:"1px solid #FF4D6A33",borderRadius:8,fontSize:12,color:G.rojo}}>
+                ⚠ El stock de sistema de algún producto cambió desde que se hizo este conteo (probablemente por ventas nuevas). Si aplicás el ajuste, igual se pisa con el número contado — revisá la columna "Sistema (ahora)" antes de confirmar.
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ============================================================
 // MODULO: CONFIGURACION — Vendedores
 // ============================================================
 function ModuloConfiguracion({vendedores,onGuardar,onToggle,proveedores,onGuardProv,onToggleProv,productos,tipoCambio,onActualizarTC,onActualizarPct,onActualizarCSV}){
@@ -7677,6 +7894,7 @@ export default function App(){
     {id:"clientes",       label:"Clientes",       alerta:0},
     {id:"productos",      label:"Productos",      alerta:alertasStock},
     {id:"abastecimiento", label:"Abastecimiento", alerta:0},
+    {id:"stock_fisico",   label:"Control de Stock", alerta:0},
     {id:"tareas",         label:"Tareas",         alerta:tareasAlerta},
     {id:"traspasos",      label:"Traspasos",      alerta:0, soloAdmin:true, soloPilar:true},
     {id:"caja",           label:"Cierre de Caja", alerta:0, soloAdmin:true},
@@ -7728,6 +7946,7 @@ export default function App(){
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} onRegistrar={data.registrarAbastecimiento} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
+              {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
               {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
               {modulo==="tareas"         && <ModuloTareas         tareas={data.tareas} responsables={data.responsables} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} onGuardar={data.guardarTarea} onCambiarEstado={data.cambiarEstadoTarea} onEliminar={data.eliminarTarea} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
