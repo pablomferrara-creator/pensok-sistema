@@ -821,6 +821,37 @@ function useData(toast){
     await cargar();
   }
 
+  // Tarea mensual automática de Control de Stock: si todavía no existe una para este mes
+  // y este local, se crea sin responsable asignado (cualquiera del equipo la puede tomar).
+  // Se llama al cargar la app (ver App > useEffect de asegurarTareasControlStockMensual).
+  const PROYECTO_CONTROL_STOCK = "Control de Stock (mensual)";
+  async function asegurarTareasControlStockMensual(){
+    const mesActual = mesAct(); // "YYYY-MM"
+    const [y,m] = mesActual.split("-").map(Number);
+    const nombreMes = MESES_CAL[m-1];
+    const ultimoDia = new Date(y,m,0).getDate();
+    const fechaLimite = `${mesActual}-${String(ultimoDia).padStart(2,"0")}`;
+    let creadas = false;
+    for(const loc of ["pilar","camanio"]){
+      const yaExiste = tareas.some(t=>t.proyecto===PROYECTO_CONTROL_STOCK && t.local===loc && (t.fecha_limite||"").startsWith(mesActual));
+      if(yaExiste) continue;
+      const{error}=await supabaseTareas.from("tareas").insert({
+        titulo: `Control de stock mensual — ${nombreMes} ${y}`,
+        descripcion: "Contar el stock físico de todas las categorías del mes. Se puede hacer de a poco (una categoría por vez) desde Control de Stock.",
+        responsable: null,
+        local: loc,
+        prioridad: "media",
+        fecha_limite: fechaLimite,
+        proyecto: PROYECTO_CONTROL_STOCK,
+        estado: "pendiente",
+        creado_por: "Sistema (automático)",
+      });
+      if(error) console.warn("No se pudo crear la tarea mensual de Control de Stock:",error);
+      else creadas = true;
+    }
+    if(creadas) await cargar();
+  }
+
   // ── VENDEDORES ───────────────────────────────────────────
   async function guardarVendedor(datos,id=null){
     if(id){
@@ -1362,7 +1393,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,asegurarTareasControlStockMensual};
 }
 
 // ============================================================
@@ -7809,6 +7840,13 @@ export default function App(){
   },[]);
 
   const data = useData(toast);
+
+  // Al cargar (y en cada auto-refresh), un admin dispara la creación de la tarea
+  // mensual de Control de Stock si todavía no existe para este mes — ver useData.
+  useEffect(()=>{
+    if(data.loading||!esAdmin) return;
+    data.asegurarTareasControlStockMensual();
+  },[data.loading,esAdmin]);
 
   // Detectar pedidos web nuevos y reproducir sonido
   const pedidosWebPendCount = data.pedidosWeb?.length||0;
