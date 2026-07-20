@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
@@ -163,6 +163,41 @@ function Div(){return <div style={{height:1,background:G.borde,margin:"14px 0"}}
 function Avatar({nombre,size=36,color}){const bg=color||G.verde;return(<div style={{width:size,height:size,borderRadius:"50%",background:bg+"22",border:`1px solid ${bg}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.33,fontWeight:600,color:bg,flexShrink:0}}>{iniciales(nombre)}</div>);}
 function Spinner(){return <div style={{width:20,height:20,border:`2px solid ${G.borde}`,borderTopColor:G.verde,borderRadius:"50%",animation:"spin .7s linear infinite"}}/>;}
 function Modal({title,onClose,children,footer,maxWidth=520}){return(<div style={{position:"fixed",inset:0,background:"#00000088",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={{background:G.sup,border:`1px solid ${G.borde}`,borderRadius:14,width:"100%",maxWidth,maxHeight:"92vh",overflowY:"auto"}}><div style={{padding:"16px 22px",borderBottom:`1px solid ${G.borde}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontWeight:600,fontSize:15}}>{title}</div><Btn small variant="ghost" onClick={onClose}>✕</Btn></div><div style={{padding:"20px 22px"}}>{children}</div>{footer&&<div style={{padding:"14px 22px",borderTop:`1px solid ${G.borde}`,display:"flex",justifyContent:"flex-end",gap:10}}>{footer}</div>}</div></div>);}
+
+// Nav superior agrupada: cada grupo es un botón con dropdown de sus tabs (ver App > tabsTodos/GRUPOS_NAV).
+function NavGroupDropdown({label,items,modulo,onSelect}){
+  const [open,setOpen]=useState(false);
+  const ref=useRef(null);
+  useEffect(()=>{
+    function onDocClick(e){ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[]);
+  if(items.length===0) return null;
+  const activo = items.some(t=>t.id===modulo);
+  const alertaTotal = items.reduce((s,t)=>s+(t.alerta||0),0);
+  return(
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{background:activo?G.verde:"transparent",color:activo?"#000":G.textoSec,border:"none",borderRadius:7,padding:"5px 11px",fontSize:12,fontWeight:activo?600:400,cursor:"pointer",position:"relative",display:"flex",alignItems:"center",gap:4,transition:"all .15s"}}>
+        {label}
+        <span style={{fontSize:8,opacity:0.7}}>▾</span>
+        {alertaTotal>0&&<span style={{position:"absolute",top:2,right:-4,minWidth:14,height:14,background:activo?"#00000055":G.rojo,borderRadius:7,fontSize:9,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{alertaTotal}</span>}
+      </button>
+      {open&&(
+        <div style={{position:"absolute",top:"100%",left:0,marginTop:4,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,minWidth:180,zIndex:60,overflow:"hidden",boxShadow:"0 8px 24px #00000055"}}>
+          {items.map(t=>(
+            <button key={t.id} onClick={()=>{onSelect(t.id);setOpen(false);}}
+              style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,width:"100%",textAlign:"left",background:modulo===t.id?G.borde:"transparent",color:modulo===t.id?G.texto:G.textoSec,border:"none",padding:"9px 12px",fontSize:12,fontWeight:modulo===t.id?600:400,cursor:"pointer"}}>
+              {t.label}
+              {t.alerta>0&&<span style={{minWidth:14,height:14,background:G.rojo,borderRadius:7,fontSize:9,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{t.alerta}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ============================================================
 // TOAST NOTIFICATIONS
@@ -7848,20 +7883,26 @@ export default function App(){
 
   const tabsTodos=[
     {id:"venta",          label:"Nueva venta",    alerta:0},
-    {id:"ingresos",       label:"Ingresos",       alerta:pendientesCobro},
-    {id:"pedidos_web",    label:"Pedidos web",    alerta:pedidosWebPend, soloPilar:true},
-    {id:"egresos",        label:"Egresos",        alerta:reembolsosPend},
-    {id:"clientes",       label:"Clientes",       alerta:0},
-    {id:"productos",      label:"Productos",      alerta:alertasStock},
-    {id:"abastecimiento", label:"Abastecimiento", alerta:0},
-    {id:"stock_fisico",   label:"Control de Stock", alerta:0},
-    {id:"tareas",         label:"Tareas",         alerta:tareasAlerta},
-    {id:"traspasos",      label:"Traspasos",      alerta:0, soloAdmin:true, soloPilar:true},
-    {id:"caja",           label:"Cierre de Caja", alerta:0, soloAdmin:true},
-    {id:"configuracion",  label:"Configuracion",  alerta:0, soloAdmin:true},
-    {id:"analisis",       label:"Dashboard",      soloAdmin:true},
+    {id:"ingresos",       label:"Ingresos",       alerta:pendientesCobro,  grupo:"ventas"},
+    {id:"pedidos_web",    label:"Pedidos web",    alerta:pedidosWebPend,   grupo:"ventas", soloPilar:true},
+    {id:"clientes",       label:"Clientes",       alerta:0,                grupo:"ventas"},
+    {id:"productos",      label:"Productos",      alerta:alertasStock,     grupo:"inventario"},
+    {id:"abastecimiento", label:"Abastecimiento", alerta:0,                grupo:"inventario"},
+    {id:"stock_fisico",   label:"Control de Stock", alerta:0,              grupo:"inventario"},
+    {id:"egresos",        label:"Egresos",        alerta:reembolsosPend,   grupo:"finanzas"},
+    {id:"traspasos",      label:"Traspasos",      alerta:0,                grupo:"finanzas", soloAdmin:true, soloPilar:true},
+    {id:"caja",           label:"Cierre de Caja", alerta:0,                grupo:"finanzas", soloAdmin:true},
+    {id:"tareas",         label:"Tareas",         alerta:tareasAlerta,     grupo:"otros"},
+    {id:"configuracion",  label:"Configuracion",  alerta:0,                grupo:"otros", soloAdmin:true},
+    {id:"analisis",       label:"Dashboard",      alerta:0,                grupo:"otros", soloAdmin:true},
   ];
   const tabs = tabsTodos.filter(t=>(esAdmin||!t.soloAdmin)&&(!t.soloPilar||localKey==="pilar"));
+  const GRUPOS_NAV = [
+    {id:"ventas",     label:"Ventas"},
+    {id:"inventario", label:"Inventario"},
+    {id:"finanzas",   label:"Finanzas"},
+    {id:"otros",      label:"Otros"},
+  ];
 
   return(
     <>
@@ -7875,13 +7916,15 @@ export default function App(){
             <span style={{fontWeight:600,fontSize:14,letterSpacing:-0.3}}>Pensok</span>
             <span style={{color:localKey==="camanio"?"#2B7FD4":G.verde,fontSize:12,fontWeight:700,letterSpacing:0.5}}>{localActivo.nombre.replace("Pensok ","")}</span>
           </div>
-          <nav className="psk-nav" style={{display:"flex",gap:1}}>
-            {tabs.map(t=>(
+          <nav className="psk-nav" style={{display:"flex",gap:4,alignItems:"center"}}>
+            {tabs.filter(t=>t.id==="venta").map(t=>(
               <button key={t.id} onClick={()=>setModulo(t.id)}
-                style={{background:modulo===t.id?G.verde:"transparent",color:modulo===t.id?"#000":G.textoSec,border:"none",borderRadius:7,padding:"5px 11px",fontSize:12,fontWeight:modulo===t.id?600:400,cursor:"pointer",position:"relative",transition:"all .15s"}}>
+                style={{background:modulo===t.id?G.verde:"transparent",color:modulo===t.id?"#000":G.textoSec,border:"none",borderRadius:7,padding:"5px 11px",fontSize:12,fontWeight:modulo===t.id?600:400,cursor:"pointer",transition:"all .15s"}}>
                 {t.label}
-                {t.alerta>0&&<span style={{position:"absolute",top:2,right:2,minWidth:14,height:14,background:modulo===t.id?"#00000055":G.rojo,borderRadius:7,fontSize:9,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{t.alerta}</span>}
               </button>
+            ))}
+            {GRUPOS_NAV.map(g=>(
+              <NavGroupDropdown key={g.id} label={g.label} items={tabs.filter(t=>t.grupo===g.id)} modulo={modulo} onSelect={setModulo}/>
             ))}
           </nav>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
