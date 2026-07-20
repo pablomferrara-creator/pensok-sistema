@@ -3954,45 +3954,6 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     else toast.ok(`Sincronizado: ${ok} OK · ${errores} sin coincidencia en Caamaño`);
   }
 
-  async function exportarControlInventario(){
-    setGenerando(true);
-    try{
-      const XLSX=await import("https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs");
-      const fecha=new Date().toLocaleDateString("es-AR");
-
-      // Todos los productos activos, ordenados por categoría y nombre — para conteo físico completo
-      const activos=[...productos].filter(p=>p.activo)
-        .sort((a,b)=>(a.categoria||"").localeCompare(b.categoria||"")||a.nombre.localeCompare(b.nombre));
-
-      const data=[
-        ["CONTROL DE INVENTARIO — PENSOK"],
-        ["Fecha: "+fecha],
-        [""],
-        ["Código","Producto","Categoría","Proveedor","Stock sistema","Stock real","Diferencia","Observaciones"],
-      ];
-      activos.forEach(p=>{
-        data.push([p.codigo||"",p.nombre,p.categoria||"",p.proveedor||"",p.stock||0,"","",""]);
-      });
-
-      const ws=XLSX.utils.aoa_to_sheet(data);
-      ws["!cols"]=[{wch:12},{wch:45},{wch:18},{wch:20},{wch:14},{wch:12},{wch:12},{wch:25}];
-
-      // Fórmula de diferencia = Stock real - Stock sistema, para cada fila de producto
-      activos.forEach((p,idx)=>{
-        const row=5+idx; // fila 1-indexed en excel (4 filas de encabezado + 1)
-        const cell="G"+row;
-        ws[cell]={t:"n",f:`F${row}-E${row}`};
-      });
-
-      const wb=XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb,ws,"Control inventario");
-      XLSX.writeFile(wb,`control-inventario-pensok-${new Date().toISOString().split("T")[0]}.xlsx`);
-    }catch(e){
-      console.error("Error exportando control de inventario:",e);
-    }
-    setGenerando(false);
-  }
-
   async function generarListaPDF(tipo, productos_filtrados, filtrosInfo={}){
     setGenerando(true);
     // Cargar jsPDF dinámicamente
@@ -4530,7 +4491,6 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               <Btn variant="ghost" small onClick={()=>{setB("");setFC("Todas");setFPr("Todos");setFMarca("Todas");setFE("Todos");}}>✕ Limpiar filtros</Btn>
             )}
             <Btn variant="secondary" onClick={()=>setModalLista(true)}>📄 Lista de precios</Btn>
-            <Btn variant="secondary" disabled={generando} onClick={exportarControlInventario}>{generando?"Generando...":"📋 Control de inventario"}</Btn>
             {esAdmin&&localKey==="pilar"&&<Btn variant="secondary" disabled={sincronizando} onClick={sincronizarConCamanio}>{sincronizando?"Sincronizando...":"🔄 Sincronizar con Caamaño"}</Btn>}
             {esAdmin&&<Btn variant="secondary" onClick={()=>{setRcResultado(null);setModalRecompra(true);}}>🛒 Reporte de compra</Btn>}
             {esAdmin&&localKey==="pilar"&&<Btn onClick={abrirNuevo}>+ Nuevo producto</Btn>}
