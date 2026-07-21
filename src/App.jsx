@@ -6455,17 +6455,15 @@ function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[]
     const match = todos.find(v=>(v.email||"").trim().toLowerCase()===email);
     return match?.nombre || "";
   },[vendedores,vendedoresOtro,usuarioEmail]);
-  // Fallback temporal: los emails de vendedores todavía no están cargados (vacíos en Pilar, la columna
-  // ni siquiera existe en Caamaño), así que un login no-admin no se puede identificar por email todavía.
-  // Mientras tanto, cualquier sesión no-admin puede gestionar las tareas asignadas a Fabri o Maxi
-  // puntualmente. Sacar este fallback el día que se carguen los emails reales de cada vendedor.
+  // Fallback solo para logins que no se pueden identificar por email — hoy, la PC compartida de
+  // Pilar entre Fabri y Maxi (Caamaño ya tiene un email por persona, así que ahí esto no se usa:
+  // miNombre resuelve directo al nombre real de quien está logueado).
   const RESPONSABLES_SIN_EMAIL = ["fabri","maxi"];
   const esResponsable = (t)=>{
     if(!t.responsable) return false;
     const resp = t.responsable.trim().toLowerCase();
-    if(miNombre && resp===miNombre.trim().toLowerCase()) return true;
-    if(RESPONSABLES_SIN_EMAIL.includes(resp)) return true;
-    return false;
+    if(miNombre) return resp===miNombre.trim().toLowerCase();
+    return RESPONSABLES_SIN_EMAIL.includes(resp);
   };
   // Puede editar / completar: admin, el responsable de la tarea, o cualquiera si no tiene responsable asignado
   const puedeGestionar = (t)=> esAdmin || esResponsable(t) || !t.responsable;
