@@ -3466,6 +3466,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedor
           <div style={{flex:1,minWidth:150}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Tipo</div><Fi value={filtroT} onChange={setFT} options={["Todos","Gasto fijo","Gasto variable","Retiro de capital"]}/></div>
           <div style={{flex:1,minWidth:130}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Pagador</div><Fi value={filtroP} onChange={setFP} options={["Todos","Pensok",...(vendedores||[]).map(v=>v.nombre)]}/></div>
           <div style={{flex:1,minWidth:130}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Fecha</div><Fi value={filtroF} onChange={setFF} type="date"/></div>
+          <div style={{flex:1,minWidth:190}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Estado</div><Fi value={filtroReemb?"pendientes":"todos"} onChange={v=>setFiltroReemb(v==="pendientes")} options={[{value:"todos",label:"Todos"},{value:"pendientes",label:"Reembolsos pendientes de pago"}]}/></div>
           {(filtroF||busqEg||filtroT!=="Todos"||filtroP!=="Todos")&&<Btn small variant="ghost" onClick={()=>{setFF("");setBusqEg("");setFT("Todos");setFP("Todos");}}>Limpiar</Btn>}
           <Btn onClick={()=>setModal(true)}>+ Nuevo egreso</Btn>
         </div>
