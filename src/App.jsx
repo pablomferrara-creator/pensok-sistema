@@ -3696,6 +3696,8 @@ function ModuloClientes({clientes,onGuardar,ventas}){
   const [fTel,setFTel]=useState(""); const [fEmail,setFEmail]=useState("");
   const [fDir,setFDir]=useState(""); const [fLimite,setFLim]=useState("0");
   const [fNotas,setFNotas]=useState(""); const [loading,setLoading]=useState(false);
+  const [fechaDesde,setFechaDesde]=useState(""); const [fechaHasta,setFechaHasta]=useState("");
+  const [orden,setOrden]=useState("nombre"); // nombre | monto | compras
 
   function abrirNuevo(){setEditando(null);setFN("");setFTipo("minorista");setFTel("");setFEmail("");setFDir("");setFLim("0");setFNotas("");setModal(true);}
   function abrirEditar(c){setEditando(c);setFN(c.nombre);setFTipo(c.tipo);setFTel(c.telefono||"");setFEmail(c.email||"");setFDir(c.direccion||"");setFLim(String(c.limite_cuenta||0));setFNotas(c.notas||"");setModal(true);}
@@ -3708,6 +3710,40 @@ function ModuloClientes({clientes,onGuardar,ventas}){
   }
 
   const filtrados=useMemo(()=>clientes.filter(c=>{if(filtroT!=="Todos"&&c.tipo!==filtroT)return false;if(busqueda){const q=busqueda.toLowerCase();if(!c.nombre.toLowerCase().includes(q)&&!(c.telefono||"").includes(q))return false;}return c.activo;}),[clientes,filtroT,busqueda]);
+  // Total real adeudado por todos los clientes — misma lógica que "Nos deben clientes" del Dashboard
+  // (saldo_cobro si existe, o el total completo si nunca se cobró nada). El campo cuenta_corriente es
+  // un mecanismo aparte (solo ventas pagadas explícitamente con "Cuenta corriente"), no alcanza para esto.
+  const saldoAdeudadoTotal=useMemo(()=>ventas.reduce((s,v)=>{
+    if((v.saldo_cobro||0)>0) return s+(v.saldo_cobro||0);
+    if(!v.cobrado&&!(v.monto_cobrado>0)) return s+(v.total||0);
+    return s;
+  },0),[ventas]);
+  const [soloConDeuda,setSoloConDeuda]=useState(false);
+  // Clientes filtrados + su compra dentro del rango de fecha elegido (si hay), listos para ordenar.
+  // La deuda de cada cliente se calcula siempre histórica (todas sus ventas), sin importar el rango de
+  // fecha elegido para "compras" — lo que debe un cliente hoy no depende del filtro de compras recientes.
+  const clientesConDatos=useMemo(()=>{
+    const enriquecidos=filtrados.map(c=>{
+      const todasDelCliente=ventas.filter(v=>String(v.cliente_id)===String(c.id)||(v.cliente_nombre&&v.cliente_nombre.toLowerCase()===c.nombre?.toLowerCase()));
+      const vCli=todasDelCliente.filter(v=>{
+        if(fechaDesde&&v.fecha<fechaDesde) return false;
+        if(fechaHasta&&v.fecha>fechaHasta) return false;
+        return true;
+      });
+      const tCli=vCli.reduce((s,v)=>s+(v.total||0),0);
+      const deuda=todasDelCliente.reduce((s,v)=>{
+        if((v.saldo_cobro||0)>0) return s+(v.saldo_cobro||0);
+        if(!v.cobrado&&!(v.monto_cobrado>0)) return s+(v.total||0);
+        return s;
+      },0);
+      return {c,vCli,tCli,deuda};
+    }).filter(e=>!soloConDeuda||e.deuda>0);
+    return enriquecidos.sort((a,b)=>{
+      if(orden==="monto") return b.tCli-a.tCli;
+      if(orden==="compras") return b.vCli.length-a.vCli.length;
+      return a.c.nombre.localeCompare(b.c.nombre);
+    });
+  },[filtrados,ventas,fechaDesde,fechaHasta,orden,soloConDeuda]);
   const clienteSelec=selecId?clientes.find(c=>c.id===selecId):null;
   const ventasCli=selecId?ventas.filter(v=>
     String(v.cliente_id)===String(selecId) ||
@@ -3861,19 +3897,23 @@ function ModuloClientes({clientes,onGuardar,ventas}){
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
           <MetricCard label="Total clientes"  value={fmtNum(clientes.filter(c=>c.activo).length)}/>
           <MetricCard label="Con cuenta cte." value={fmtNum(clientes.filter(c=>(c.cuenta_corriente||0)<0).length)} color={G.amarillo}/>
-          <MetricCard label="Saldo adeudado"  value={fmt(Math.abs(clientes.reduce((s,c)=>s+Math.min(0,c.cuenta_corriente||0),0)))} color={G.rojo}/>
+          <div onClick={()=>setSoloConDeuda(v=>!v)} style={{cursor:"pointer"}}>
+            <MetricCard label={"Saldo adeudado"+(soloConDeuda?" — click para ver todos":" — click para filtrar")} value={fmt(saldoAdeudadoTotal)} color={G.rojo} accent={soloConDeuda?G.rojo+"55":undefined}/>
+          </div>
         </div>
         <Card style={{padding:"12px 18px"}}>
           <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
             <div style={{flex:1,minWidth:180}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Buscar</div><input value={busqueda} onChange={e=>setBusq(e.target.value)} placeholder="Buscar cliente..." style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"8px 12px",color:G.texto,fontSize:13,width:"100%",outline:"none"}}/></div>
             <div style={{width:140}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Tipo</div><Fi value={filtroT} onChange={setFT} options={["Todos","minorista","especial","mayorista","costo"]}/></div>
+            <div style={{width:150}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Compras desde</div><Fi value={fechaDesde} onChange={setFechaDesde} type="date"/></div>
+            <div style={{width:150}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Hasta</div><Fi value={fechaHasta} onChange={setFechaHasta} type="date"/></div>
+            <div style={{width:170}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Ordenar por</div><Fi value={orden} onChange={setOrden} options={[{value:"nombre",label:"Nombre (A-Z)"},{value:"monto",label:"Mayor comprador ($)"},{value:"compras",label:"Más compras"}]}/></div>
             <Btn onClick={abrirNuevo}>+ Nuevo cliente</Btn>
           </div>
+          {(fechaDesde||fechaHasta)&&<div style={{fontSize:11,color:G.textoSec,marginTop:8}}>Compras y montos calculados {fechaDesde?`desde ${fechaDesde}`:""}{fechaDesde&&fechaHasta?" ":""}{fechaHasta?`hasta ${fechaHasta}`:""} — el resto de los datos del cliente (cuenta corriente, etc.) sigue siendo histórico.</div>}
         </Card>
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {filtrados.map(c=>{
-            const vCli=ventas.filter(v=>String(v.cliente_id)===String(c.id)||(v.cliente_nombre&&v.cliente_nombre.toLowerCase()===c.nombre?.toLowerCase()));
-            const tCli=vCli.reduce((s,v)=>s+(v.total||0),0);
+          {clientesConDatos.map(({c,vCli,tCli,deuda})=>{
             const selec=selecId===c.id;
             return(
               <div key={c.id} onClick={()=>setSelecId(selec?null:c.id)} style={{background:selec?G.sup2:G.sup,border:`1px solid ${selec?G.verde+"55":G.borde}`,borderRadius:12,padding:"12px 18px",cursor:"pointer",transition:"all .15s"}}>
@@ -3885,7 +3925,7 @@ function ModuloClientes({clientes,onGuardar,ventas}){
                       <div style={{fontSize:12,color:G.textoSec,marginTop:2}}>{c.telefono&&<span>{c.telefono} · </span>}{vCli.length} compras · {fmt(tCli)}</div>
                       <div style={{display:"flex",gap:6,marginTop:5}}>
                         <Badge color={colorT[c.tipo]}>{c.tipo}</Badge>
-                        {(c.cuenta_corriente||0)<0&&<Badge color="rojo">Debe {fmt(Math.abs(c.cuenta_corriente||0))}</Badge>}
+                        {deuda>0&&<Badge color="rojo">Debe {fmt(deuda)}</Badge>}
                         {(c.limite_cuenta||0)>0&&<Badge color="gris">Limite {fmt(c.limite_cuenta)}</Badge>}
                       </div>
                     </div>
@@ -3896,7 +3936,7 @@ function ModuloClientes({clientes,onGuardar,ventas}){
               </div>
             );
           })}
-          {filtrados.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>Sin clientes</div>}
+          {clientesConDatos.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>Sin clientes</div>}
         </div>
       </div>
       {clienteSelec&&(
