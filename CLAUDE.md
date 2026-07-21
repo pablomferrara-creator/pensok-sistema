@@ -7,8 +7,8 @@ Contexto de proyecto para Claude Code. Léelo completo antes de tocar código �
 Pensok es una distribuidora/retail con dos locales físicos — **Pilar** y **Caamaño** — cada uno con su propia base de datos Supabase, corriendo el **mismo código** (una sola app, no dos). Rubros: piletas, jardinería, riego, perfumería, limpieza, fumigación.
 
 - **Titular legal**: DOMOKIP SAS (CUIT 30-71686952-7)
-- **Admins de la app**: Pablo (socio, dev principal) y Kito — ambos con acceso a los dos locales
-- **Vendedores/staff no-admin**: Triko, Kito, Pato, Maxi, Fabri — con permisos limitados vía gates en el código
+- **Admins de la app**: en Pilar, Pablo (socio, dev principal) y Kito. En Caamaño, Pato y Triko son socios de ese local y también tienen rol `admin` (no son staff). Todos los admins tienen acceso a los dos locales vía la app.
+- **Vendedores/staff no-admin reales**: Fabri y Maxi, ambos en **Pilar**, donde comparten una única PC/login (no tienen emails individuales) — ver "Sistema de login y roles" más abajo para cómo afecta esto los permisos de Tareas.
 
 ## Arquitectura
 
@@ -28,6 +28,8 @@ Pensok es una distribuidora/retail con dos locales físicos — **Pilar** y **Ca
 
 - `App.jsx` (raíz de `src/`) — el sistema interno de gestión, en producción, lo que usamos en el día a día.
 - `src/portal/` — **portal público de pedidos, todavía en DRAFT, no implementado oficialmente**. Idea: un cliente carga un pedido desde afuera → llega como aviso a la app interna (sección "Pedidos web") → un vendedor lo revisa y aprueba → recién ahí se pasa a Ingresos como venta oficial. No tratar este código con el mismo nivel de "no romper nada" que `App.jsx` — es experimental, y antes de darlo por completo hay que confirmar con Pablo el flujo real (por ahora hay una sección "Pedidos web" ya cableada en `App.jsx`/`ModuloConfiguracion`/menú lateral que referencia `pedidos_web_pendientes`, pero el portal público en sí que alimenta esa tabla está en desarrollo).
+- `sql/` — SQL de cambios de esquema entregados para correr a mano en Supabase (ver punto 3 de "Flujo de trabajo esperado"). Es un historial de referencia, no se ejecuta solo ni es parte del build.
+- **Menú superior**: agrupado en dropdowns por tipo de tarea (Ventas, Inventario, Finanzas, Otros) más "Nueva venta" suelto — antes eran ~13 pestañas sueltas que no entraban en una fila. `tabsTodos` define `grupo` por tab; `GRUPOS_NAV` define el orden/label de cada dropdown.
 
 ## PDF y Excel — carga dinámica por CDN, NO son dependencias npm
 
@@ -48,7 +50,7 @@ Si `npm run build` no tira error, el archivo compila. **Siempre correrlo antes d
 
 ## Zonas frágiles — pedir confirmación antes de tocar
 
-- **`ModuloIngresos`**: tiene duplicación estructural histórica de `guardarVenta` y `guardarQuickEdit` (dos copias del mismo flujo). Cambios ahí son de alto riesgo — camino de mínimo riesgo, confirmar antes de refactorizar.
+- **`ModuloIngresos`**: tiene duplicación estructural histórica — `abrirEditarVenta`/`guardarVenta` están declaradas DOS veces dentro del mismo componente (y lo mismo `abrirQuickEdit`/`guardarQuickEdit`). En JS, la segunda declaración de una `function` con el mismo nombre pisa a la primera silenciosamente: la que realmente corre en runtime es siempre la **última** definida en el archivo, la primera queda como código muerto sin usar. Si hay que corregir un bug en estos flujos, verificar en cuál de las dos copias cae el cambio real (la de más abajo) — y si se corrige algo de fondo, replicarlo en ambas copias por consistencia aunque solo una esté viva.
 - **`generarListaPDF`**: también existe duplicada (una copia viva en `ModuloProductos`, una muerta sin usar dentro de `ModuloProveedores`). Si se corrige un bug ahí, corregir las dos copias por consistencia, aunque solo una esté en uso.
 - **Cierre de Caja (`ModuloCaja`)**: cálculo del "esperado" por billetera. Ya tuvo varios bugs de atribución (ver historial de cambios más abajo) — cualquier cambio acá se prueba con SQL diagnóstico contra datos reales ANTES de tocar código, nunca a ciegas.
 
@@ -65,6 +67,31 @@ Si `npm run build` no tira error, el archivo compila. **Siempre correrlo antes d
 - **Atribución de ventas por billetera en el Cierre de Caja**: si una venta tiene pagos registrados en `pagos_deuda` (cobros parciales), se usa el método REAL de cada pago — no el `metodo_pago` nominal de la venta. Esto importa mucho para ventas con pago mixto (parte efectivo, parte MP).
 - **Devoluciones (notas de crédito)**: tablas `devoluciones` + `devolucion_items`, solo en Pilar y Caamaño por separado (no compartidas). Reingresan stock (matcheo por nombre de producto, con las mismas limitaciones que el resto del sistema porque `venta_items` no guarda `producto_id`), pueden ser reembolso en dinero o saldo a favor del cliente, y restan del Cierre de Caja como salida de billetera.
 - **Sales/Excel**: Google Sheet con una fila por ítem vendido; varios ítems comparten el mismo "N Factura" (ej. `VEN-20260429-00002`), que es la clave de deduplicación contra `ventas`/`venta_items`.
+- **Editar el método de pago de una venta ya cobrada**: `editarVenta` actualiza `ventas.metodo_pago`, pero el Cierre de Caja y el Libro de Movimientos usan el método REAL guardado en `pagos_deuda` cuando existe (ver regla de arriba). Si la venta ya estaba cobrada (no se está marcando/desmarcando cobrado ni registrando un pago nuevo) y tiene un único pago simple asociado, `editarVenta` también corrige ese registro de `pagos_deuda` automáticamente. Si la venta tiene cobros partidos (varios pagos), NO se toca nada automáticamente — cada pago parcial se corrige a mano desde "Editar pago" en el detalle de esa venta, porque no hay forma de saber a cuál de los pagos partidos se refiere el cambio.
+- **"Cobrado" ya no es un checkbox en los modales de editar venta** (ni en "Editar venta" ni en "Actualizar venta", la edición rápida de vendedores) — se sacó a propósito, igual que "Método de pago"/"Pago a proveedor" en la creación de egresos, porque duplicaba/confundía con el flujo correcto: **"Registrar cobro"** (botón que aparece en la venta mientras no esté cobrada) es el único camino para marcar un cobro, porque ahí sí se registra fecha/monto/método reales en `pagos_deuda`. Ambos modales ahora muestran el estado de cobro como badge de solo lectura.
+- **"Saldo adeudado" en Clientes**: se calcula igual que "Nos deben clientes" del Dashboard — ventas con `saldo_cobro>0` o `cobrado=false`, NO el campo `cuenta_corriente` del cliente (ese es un mecanismo aparte, casi sin uso, que solo se mueve cuando una venta se paga explícitamente con método "Cuenta corriente"). El badge "Debe $X" de cada cliente en la lista usa la misma lógica real, no `cuenta_corriente`.
+
+## Control de Stock (conteo físico + ajuste)
+
+Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubir". Tablas nuevas por local (`conteos_stock`, `conteos_stock_items` — igual que `devoluciones`, no compartidas entre Pilar y Caamaño porque el stock es independiente).
+
+- **Flujo**: cualquier usuario elige una categoría → cuenta todos los productos activos de esa categoría (o imprime antes una planilla en PDF con el logo de Pensok para recorrer el local a mano) → guarda el conteo. Esto queda como **registro histórico**, sin tocar `productos.stock` todavía.
+- **Aplicar el ajuste** (pisar `productos.stock` con lo contado) es **solo admin**, desde el detalle del conteo, y avisa si el stock de sistema cambió desde que se contó (por ventas nuevas en el medio) antes de confirmar.
+- **Admin puede corregir un conteo ya guardado pero todavía no aplicado** (botón "Editar conteo" en el detalle) — para cuando un vendedor se confundió de producto al contar. Esto no toca stock real, solo el registro del conteo.
+- **Aviso automático a los admins**: al guardar un conteo se crea sola una tarea en Tareas (`proyecto: "Control de Stock (ajuste)"`, prioridad alta, vence hoy, sin responsable asignado) para que algún admin revise y aplique el ajuste. Esa tarea **no se puede tildar a mano desde Tareas** — el checkbox queda deshabilitado a propósito; se cierra sola cuando se aplica el ajuste correspondiente (se vincula por texto, buscando `"Conteo #<id> "` dentro de la descripción de la tarea).
+- **Tarea mensual automática**: además, cada vez que un admin carga la app se chequea si ya existe la tarea "Control de stock mensual — {Mes} {Año}" para el mes en curso (por local); si no existe, se crea sola (`proyecto: "Control de Stock (mensual)"`). Esta sí es una tarea normal, tildable a mano — es solo un recordatorio, no tiene una acción que la cierre automáticamente.
+
+## Sistema de login y roles
+
+- Login por Supabase Auth (email/password). El rol (`admin` o `local`) se guarda en la tabla `user_roles` (`email` → `rol`), separada de `vendedores`.
+- El **nombre visible** del vendedor logueado (para saber si es responsable de una tarea puntual, por ejemplo) se resuelve cruzando el email de sesión contra `vendedores.email` — **NO todos los vendedores tienen este campo cargado**:
+  - Caamaño: Pato y Triko (admins/socios ahí) sí tienen su email real cargado en `vendedores`.
+  - Pilar: Fabri y Maxi (los únicos vendedores no-admin reales) **comparten una sola PC/login**, sin emails individuales — no hay forma de distinguirlos por sesión.
+- Por eso, en `ModuloTareas`, el permiso para gestionar una tarea asignada (`esResponsable`) tiene un fallback: si el login no se puede identificar por email (`miNombre` vacío — hoy, la PC compartida de Pilar), se permite gestionar tareas asignadas a `"Fabri"` o `"Maxi"` puntualmente (array `RESPONSABLES_SIN_EMAIL` en el código). Si en algún momento Fabri y Maxi tienen logins/emails individuales, este fallback deja de hacer falta y se puede sacar.
+
+## Deploy — Vercel a veces no dispara solo
+
+El deploy es automático (GitHub → Vercel) y normalmente funciona, pero **al menos una vez el webhook no disparó** un build para un push nuevo (el commit llegó bien a GitHub, Vercel ni siquiera lo mostró en su lista de Deployments). Si después de pushear y esperar unos minutos el sitio sigue sirviendo el bundle viejo, un commit vacío (`git commit --allow-empty`) suele destrabarlo. Para chequear si el deploy ya está activo sin depender del ojo: pedir el HTML de `pensok-sistema.vercel.app`, sacar el nombre del archivo `assets/index-*.js`, y mirar su header `Last-Modified` — si es de antes del último push, todavía no se actualizó.
 
 ## Convenciones de estilo y comunicación
 
