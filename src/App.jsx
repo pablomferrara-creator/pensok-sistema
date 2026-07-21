@@ -6455,9 +6455,22 @@ function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[]
     const match = todos.find(v=>(v.email||"").trim().toLowerCase()===email);
     return match?.nombre || "";
   },[vendedores,vendedoresOtro,usuarioEmail]);
-  const esResponsable = (t)=> miNombre && t.responsable && t.responsable.trim().toLowerCase()===miNombre.trim().toLowerCase();
+  // Fallback temporal: los emails de vendedores todavía no están cargados (vacíos en Pilar, la columna
+  // ni siquiera existe en Caamaño), así que un login no-admin no se puede identificar por email todavía.
+  // Mientras tanto, cualquier sesión no-admin puede gestionar las tareas asignadas a Fabri o Maxi
+  // puntualmente. Sacar este fallback el día que se carguen los emails reales de cada vendedor.
+  const RESPONSABLES_SIN_EMAIL = ["fabri","maxi"];
+  const esResponsable = (t)=>{
+    if(!t.responsable) return false;
+    const resp = t.responsable.trim().toLowerCase();
+    if(miNombre && resp===miNombre.trim().toLowerCase()) return true;
+    if(RESPONSABLES_SIN_EMAIL.includes(resp)) return true;
+    return false;
+  };
   // Puede editar / completar: admin, el responsable de la tarea, o cualquiera si no tiene responsable asignado
   const puedeGestionar = (t)=> esAdmin || esResponsable(t) || !t.responsable;
+  // Las tareas que se auto-completan desde Control de Stock no se pueden tildar a mano desde acá
+  const esAutoGestionada = (t)=> t.proyecto==="Control de Stock (ajuste)";
   const [tab,setTab]                   = useState("lista");
   const [modal,setModal]               = useState(false);
   const [editando,setEditando]         = useState(null);
@@ -6555,12 +6568,17 @@ function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[]
     const hecha = t.estado==="hecha";
     const vencida = !hecha && t.fecha_limite && t.fecha_limite<hoyStr;
     const gestiona = puedeGestionar(t);
+    const autoGestionada = esAutoGestionada(t);
+    const puedeCompletar = gestiona && !autoGestionada;
+    const tituloCheckbox = autoGestionada
+      ? "Esta tarea se completa sola al aplicar el ajuste desde Control de Stock"
+      : (!gestiona?`Solo ${t.responsable} o un admin pueden completar esta tarea`:undefined);
     return(
       <div style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",background:G.sup2,border:`1px solid ${vencida?G.rojo+"55":G.borde}`,borderRadius:9,borderLeft:`3px solid ${hecha?G.verde:colorPrioridad(t.prioridad)}`}}>
-        <input type="checkbox" checked={hecha} disabled={!gestiona} title={!gestiona?`Solo ${t.responsable} o un admin pueden completar esta tarea`:undefined}
-          style={{marginTop:3,cursor:gestiona?"pointer":"not-allowed",flexShrink:0,opacity:gestiona?1:0.5}}
+        <input type="checkbox" checked={hecha} disabled={!puedeCompletar} title={tituloCheckbox}
+          style={{marginTop:3,cursor:puedeCompletar?"pointer":"not-allowed",flexShrink:0,opacity:puedeCompletar?1:0.5}}
           onChange={e=>{
-            if(!gestiona) return;
+            if(!puedeCompletar) return;
             if(e.target.checked){ setComentarioCierre(""); setModalCompletar(t); }
             else onCambiarEstado(t.id,"pendiente",usuarioEmail);
           }}/>
