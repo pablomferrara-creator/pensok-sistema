@@ -3531,7 +3531,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedor
               </div>
               <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                 <div style={{fontSize:18,fontWeight:700,color:G.rojo,fontFamily:"'DM Mono',monospace"}}>{fmt(e.monto)}</div>
-                {esAdmin&&(e.reembolso_pendiente||!e.reembolsado)&&<Btn small variant="outline" onClick={()=>{
+                {esAdmin&&(e.reembolso_pendiente&&!e.reembolsado)&&<Btn small variant="outline" onClick={()=>{
                   setModalPagos(e);
                   setNuevoPagoMonto(String(e.saldo_pendiente||e.monto||""));
                   setNuevoPagoMetodo(e.metodo_pago||METODOS_PAGO[0]);
