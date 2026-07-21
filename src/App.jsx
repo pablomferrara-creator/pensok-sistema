@@ -1037,6 +1037,19 @@ function useData(toast){
       });
     }
 
+    // Si la venta YA estaba cobrada (no se está marcando/desmarcando cobrado ni registrando un pago
+    // nuevo) y cambió el método de pago, corregir también el registro en pagos_deuda — si no, el Libro
+    // de Movimientos y el Cierre de Caja siguen usando el método viejo (ver CLAUDE.md: usan el método
+    // REAL de pagos_deuda, no el metodo_pago nominal de la venta). Solo se toca si hay un único pago
+    // simple: si la venta tiene cobros partidos (varios registros en pagos_deuda), no se sabe a cuál de
+    // esos pagos parciales se refiere el cambio, así que esos se corrigen desde "Editar pago" uno por uno.
+    if(datos.metodo_pago&&ventaAnterior?.cobrado&&datos.cobrado!==false&&!pago){
+      const{data:pagosExistentes}=await supabase.from("pagos_deuda").select("id,metodo_pago").eq("referencia_id",id).eq("tipo","ingreso");
+      if(pagosExistentes&&pagosExistentes.length===1&&pagosExistentes[0].metodo_pago!==datos.metodo_pago){
+        await supabase.from("pagos_deuda").update({metodo_pago:datos.metodo_pago}).eq("id",pagosExistentes[0].id);
+      }
+    }
+
     toast.ok("Venta actualizada");await cargar();
   }
   async function eliminarVenta(id){
