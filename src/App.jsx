@@ -6356,8 +6356,22 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],devoluciones=[],toast}){
       {tab==="historial"&&(
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           {cierres.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>No hay cierres guardados aún</div>}
-          {cierres.map(c=>{
+          {cierres.map((c,idx)=>{
             const diffTotal = (c.diff_caja_chica||0)+(c.diff_mp||0)+(c.diff_banco||0);
+            // Movimientos que le corresponden a ESTE cierre puntual: los que pasaron entre el cierre
+            // anterior (guardado justo antes) y este, por fecha/hora real de creación — no por día
+            // calendario. Antes matcheaba solo por "mismo día" (m.fecha===c.fecha), así que si había
+            // más de un cierre el mismo día, los dos mostraban exactamente los mismos movimientos
+            // repetidos. Esto es solo un ajuste de qué se MUESTRA en cada card, no toca ningún
+            // cálculo del cierre en sí (cierres.map ya venía ordenado por created_at desc).
+            const cierrePrevio = cierres[idx+1];
+            const desdeT = cierrePrevio?.created_at ? new Date(cierrePrevio.created_at).getTime() : -Infinity;
+            const hastaT = c.created_at ? new Date(c.created_at).getTime() : Infinity;
+            const movimientosDeEsteCierre = movimientos.filter(m=>{
+              if(!m.created_at) return m.fecha===c.fecha; // fallback por si algún registro viejo no tiene created_at
+              const t = new Date(m.created_at).getTime();
+              return t>desdeT && t<=hastaT;
+            });
             return(
             <Card key={c.id}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
@@ -6394,10 +6408,10 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],devoluciones=[],toast}){
                 </div>
               </div>
               {c.notas&&<div style={{marginTop:10,fontSize:12,color:G.textoSec,fontStyle:"italic"}}>"{c.notas}"</div>}
-              {movimientos.filter(m=>m.fecha===c.fecha).length>0&&(
+              {movimientosDeEsteCierre.length>0&&(
                 <div style={{marginTop:10,borderTop:`1px solid ${G.borde}22`,paddingTop:8}}>
                   <div style={{fontSize:11,color:G.textoSec,fontWeight:600,marginBottom:6}}>MOVIMIENTOS</div>
-                  {movimientos.filter(m=>m.fecha===c.fecha).map(m=>(
+                  {movimientosDeEsteCierre.map(m=>(
                     <div key={m.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"3px 0",color:G.textoSec}}>
                       <span>{BOLSILLOS.find(b=>b.key===m.origen)?.label||m.origen} → {BOLSILLOS.find(b=>b.key===m.destino)?.label||m.destino}{m.concepto?` · ${m.concepto}`:""}</span>
                       <span style={{fontFamily:"DM Mono,monospace",color:G.azul}}>{fmt(m.monto)}</span>
