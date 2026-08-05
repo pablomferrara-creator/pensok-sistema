@@ -2461,15 +2461,22 @@ function ModuloVenta({clientes,productos,onRegistrar,vendedores,esAdmin=true}){
             <table className="psk-venta-tabla" style={{width:"100%",borderCollapse:"collapse",fontSize:13,marginTop:14}}>
               <thead><tr style={{borderBottom:`1px solid ${G.borde}`}}>{["Producto","Cant.","Precio","Subtotal",""].map(h=><th key={h} style={{padding:"6px 8px",textAlign:h==="Subtotal"||h==="Precio"?"right":"left",color:G.textoSec,fontWeight:500,fontSize:11}}>{h}</th>)}</tr></thead>
               <tbody>
-                {items.map(item=>(
-                  <tr key={item.productoId} style={{borderBottom:`1px solid ${G.borde}22`}}>
-                    <td style={{padding:"8px 8px"}}>{item.nombre}</td>
+                {items.map(item=>{
+                  const prod = productos.find(p=>p.id===item.productoId);
+                  const sinStock = prod && prod.stock<=0;
+                  return(
+                  <tr key={item.productoId} style={{borderBottom:`1px solid ${G.borde}22`,background:sinStock?`${G.rojo}14`:undefined}}>
+                    <td style={{padding:"8px 8px"}}>
+                      {item.nombre}
+                      {sinStock&&<div style={{fontSize:10,color:G.rojo,fontWeight:600,marginTop:2}}>⚠ SIN STOCK — avisar al cliente</div>}
+                    </td>
                     <td style={{padding:"8px 8px"}}><input type="number" value={item.cantidad} onChange={e=>{const n=parseInt(e.target.value)||1;setItems(p=>p.map(i=>i.productoId===item.productoId?{...i,cantidad:Math.max(1,n)}:i));}} min="1" style={{width:52,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 8px",color:G.texto,fontSize:13,textAlign:"center"}}/></td>
                     <td style={{padding:"8px 8px",textAlign:"right"}}><input type="number" value={item.precio} onChange={e=>setItems(p=>p.map(i=>i.productoId===item.productoId?{...i,precio:parseFloat(e.target.value)||0}:i))} style={{width:88,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 8px",color:G.texto,fontSize:13,textAlign:"right"}}/></td>
                     <td style={{padding:"8px 8px",textAlign:"right",fontFamily:"'DM Mono',monospace",fontWeight:500}}>{fmt(item.precio*item.cantidad)}</td>
                     <td style={{padding:"8px 8px"}}><Btn small variant="danger" onClick={()=>setItems(p=>p.filter(i=>i.productoId!==item.productoId))}>✕</Btn></td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
