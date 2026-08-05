@@ -331,6 +331,7 @@ function useData(toast){
   const [tareas,         setTareas]         = useState([]);
   const [vendedoresOtro, setVendedoresOtro] = useState([]); // vendedores del OTRO local (para la lista de responsables)
   const [conteosStock,   setConteosStock]   = useState([]);
+  const [historialValorStock, setHistorialValorStock] = useState([]);
   const [loading,        setLoading]        = useState(true);
 
   async function cargar(){
@@ -367,6 +368,11 @@ function useData(toast){
       const{data:cst}=await supabase.from("conteos_stock").select("*, conteos_stock_items(*)").order("creado_en",{ascending:false});
       setConteosStock(cst||[]);
     }catch(e){ console.warn("No se pudieron cargar los conteos de stock:",e); setConteosStock([]); }
+    // Historial diario de valor de stock — si la tabla aún no existe, queda vacío sin romper
+    try{
+      const{data:hvs}=await supabase.from("historial_valor_stock").select("*").order("fecha",{ascending:true});
+      setHistorialValorStock(hvs||[]);
+    }catch(e){ console.warn("No se pudo cargar el historial de valor de stock:",e); setHistorialValorStock([]); }
     // Count real de ventas
     const{count}=await supabase.from("ventas").select("*",{count:"exact",head:true});
     setTotalVentas(count||0);
@@ -850,6 +856,26 @@ function useData(toast){
       else creadas = true;
     }
     if(creadas) await cargar();
+  }
+
+  // Guarda una foto diaria del valor de stock a costo (ARS y USD al tipo de cambio actual),
+  // si todavía no hay una para hoy -- para poder graficar su evolución en el tiempo.
+  // Se llama al cargar la app, mismo patrón que asegurarTareasControlStockMensual.
+  async function asegurarValorStockDiario(){
+    const fechaHoy = hoy();
+    if(historialValorStock.some(h=>h.fecha===fechaHoy)) return;
+    const valorArs = productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0);
+    const tc = tipoCambio||USD_RATE;
+    const valorUsd = tc>0 ? valorArs/tc : 0;
+    const{error}=await supabase.from("historial_valor_stock").insert({
+      fecha:fechaHoy, valor_ars:Math.round(valorArs), valor_usd:Math.round(valorUsd*100)/100, tipo_cambio_usado:tc
+    });
+    if(error){
+      // 23505 = ya existe una fila para hoy (otra sesión la guardó justo antes) -- no es un error real.
+      if(error.code!=="23505") console.warn("No se pudo guardar el valor de stock diario:",error);
+      return;
+    }
+    await cargar();
   }
 
   // ── VENDEDORES ───────────────────────────────────────────
@@ -1476,13 +1502,13 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario};
 }
 
 // ============================================================
 // MODULO: ANALISIS / DASHBOARD
 // ============================================================
-function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
+function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],tipoCambio,onNavegar,onFiltroIngresos,onFiltroEgresos}){
   const hoyStr=hoy();const mesAct_=mesAct();const anio=new Date().getFullYear().toString();
   const [periodo,setPeriodo]=useState("mes"); // "hoy"|"dia"|"mes"|"mesEsp"|"anio"
   const [paretoOpen,setParetoOpen]=useState(false);
@@ -1562,6 +1588,7 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   const sinCobrar=ventas.filter(v=>!v.cobrado);
   const sinEntregar=ventas.filter(v=>!v.entregado);
   const alertasStock=productos.filter(p=>p.activo&&estadoStock(p)!=="ok");
+  const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0);
 
   const labelPeriodo=periodo==="hoy"?"Hoy":periodo==="dia"?diaEsp:periodo==="mes"?"Este mes":periodo==="mesEsp"?mesEsp:"Este año";
 
@@ -1873,6 +1900,9 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
           <MetricCard label="Sin entregar — click para ver" value={fmtNum(sinEntregar.length)} color={G.amarillo} sub="ventas pendientes de entrega" accent={"#FFB80033"}/>
         </div>
       </div>
+      <div onClick={()=>onNavegar("valor_stock")} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+        <MetricCard label="Valor stock a costo — click para ver evolución" value={fmt(valorStock)} color={G.azul} sub={tipoCambio?`≈ USD ${fmtNum(Math.round(valorStock/tipoCambio))} al TC actual`:"a costo"} accent={"#4D9EFF33"}/>
+      </div>
       {alertasStock.length>0&&(
         <div onClick={()=>{onNavegar("productos");setTimeout(()=>{const el=document.getElementById("panel-reposicion");if(el)el.scrollIntoView({behavior:"smooth"});},300);}} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
           <Card style={{border:`1px solid #FF8C4233`}}>
@@ -2024,6 +2054,113 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
         );
       })()}
 
+    </div>
+  );
+}
+
+// ============================================================
+// MODULO: EVOLUCION VALOR DE STOCK
+// ============================================================
+function ModuloValorStock({historial=[]}){
+  const [moneda,setMoneda] = useState("ARS"); // "ARS" | "USD"
+  const datos = [...historial].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+  const ultimo = datos[datos.length-1];
+
+  function variacion(diasAtras){
+    if(!ultimo) return null;
+    const objetivo = new Date(ultimo.fecha); objetivo.setDate(objetivo.getDate()-diasAtras);
+    // El punto más cercano a esa fecha (puede no ser exacto si hubo días sin foto)
+    const candidatos = datos.filter(d=>new Date(d.fecha)<=objetivo);
+    if(candidatos.length===0) return null;
+    const ref = candidatos[candidatos.length-1];
+    const valorRef = moneda==="ARS"?ref.valor_ars:ref.valor_usd;
+    const valorAct = moneda==="ARS"?ultimo.valor_ars:ultimo.valor_usd;
+    if(!valorRef) return null;
+    return{ref,pct:((valorAct-valorRef)/valorRef)*100};
+  }
+  const var7  = variacion(7);
+  const var30 = variacion(30);
+
+  const chartW = Math.max(700, datos.length*36);
+  const valores = datos.map(d=>moneda==="ARS"?d.valor_ars:d.valor_usd);
+  const maxV = Math.max(...valores,1);
+  const minV = Math.min(...valores,0);
+  const rango = (maxV-minV)||1;
+  const puntos = datos.map((d,i)=>{
+    const x = 55 + i*((chartW-90)/Math.max(1,datos.length-1));
+    const v = moneda==="ARS"?d.valor_ars:d.valor_usd;
+    const y = 260 - ((v-minV)/rango)*220;
+    return{x,y,d};
+  });
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+        <ST>Evolución del valor de stock a costo</ST>
+        <div style={{display:"flex",gap:8}}>
+          <Btn small variant={moneda==="ARS"?"primary":"secondary"} onClick={()=>setMoneda("ARS")}>Pesos</Btn>
+          <Btn small variant={moneda==="USD"?"primary":"secondary"} onClick={()=>setMoneda("USD")}>Dólares</Btn>
+        </div>
+      </div>
+
+      <div className="psk-grid-3" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+        <MetricCard label="Valor actual" value={ultimo?(moneda==="ARS"?fmt(ultimo.valor_ars):fmtUSD(ultimo.valor_usd)):"—"} color={G.azul} sub={ultimo?`Al ${ultimo.fecha} · TC $${fmtNum(ultimo.tipo_cambio_usado)}`:"Sin datos todavía"}/>
+        <MetricCard label="Variación 7 días" value={var7?`${var7.pct>=0?"+":""}${var7.pct.toFixed(1)}%`:"—"} color={!var7?undefined:var7.pct>=0?G.verde:G.rojo} sub={var7?`vs ${var7.ref.fecha}`:"Sin suficiente historial"}/>
+        <MetricCard label="Variación 30 días" value={var30?`${var30.pct>=0?"+":""}${var30.pct.toFixed(1)}%`:"—"} color={!var30?undefined:var30.pct>=0?G.verde:G.rojo} sub={var30?`vs ${var30.ref.fecha}`:"Sin suficiente historial"}/>
+      </div>
+
+      <Card>
+        {datos.length===0?(
+          <div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>
+            Todavía no hay historial guardado. Se va a empezar a registrar una foto por día a partir de hoy.
+          </div>
+        ):datos.length===1?(
+          <div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>Solo hay un día registrado ({datos[0].fecha}) — el gráfico va a aparecer a medida que se acumulen más días.</div>
+        ):(
+          <div style={{overflowX:"auto"}}>
+            <svg viewBox={`0 0 ${chartW} 290`} style={{width:"100%",height:290,minWidth:600,display:"block"}}>
+              {[0,25,50,75,100].map(p=>{
+                const y = 260-p*2.2;
+                const val = minV+rango*p/100;
+                return(
+                  <g key={p}>
+                    <line x1="50" y1={y} x2={chartW-20} y2={y} stroke="#444" strokeWidth="0.5" strokeDasharray="3,3"/>
+                    <text x="45" y={y+3} fontSize="9" fill="#888" textAnchor="end">{moneda==="ARS"?"$"+fmtNum(Math.round(val/1000))+"k":"U$D "+fmtNum(Math.round(val))}</text>
+                  </g>
+                );
+              })}
+              <polyline points={puntos.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={G.azul} strokeWidth="2"/>
+              {puntos.map((p,i)=>(
+                <circle key={i} cx={p.x} cy={p.y} r="3" fill={G.azul}>
+                  <title>{`${p.d.fecha}: ${moneda==="ARS"?fmt(p.d.valor_ars):fmtUSD(p.d.valor_usd)}`}</title>
+                </circle>
+              ))}
+              {puntos.filter((_,i)=>i%Math.max(1,Math.ceil(puntos.length/12))===0).map((p,i)=>(
+                <text key={"lbl"+i} x={p.x} y="278" fontSize="8" fill="#888" textAnchor="middle">{p.d.fecha.slice(5)}</text>
+              ))}
+            </svg>
+          </div>
+        )}
+      </Card>
+
+      {datos.length>0&&(
+        <Card>
+          <ST>Detalle por día</ST>
+          <div style={{display:"flex",flexDirection:"column",gap:1,maxHeight:340,overflowY:"auto",marginTop:8}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 90px",gap:8,padding:"6px 8px",fontSize:10,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>
+              <span>Fecha</span><span style={{textAlign:"right"}}>Valor ARS</span><span style={{textAlign:"right"}}>Valor USD</span><span style={{textAlign:"right"}}>TC usado</span>
+            </div>
+            {[...datos].reverse().map(d=>(
+              <div key={d.fecha} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 90px",gap:8,padding:"7px 8px",background:G.sup2,borderRadius:8,fontSize:13}}>
+                <span>{d.fecha}</span>
+                <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace"}}>{fmt(d.valor_ars)}</span>
+                <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:G.textoSec}}>{fmtUSD(d.valor_usd)}</span>
+                <span style={{textAlign:"right",color:G.textoSec}}>${fmtNum(d.tipo_cambio_usado)}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -8237,6 +8374,7 @@ export default function App(){
   useEffect(()=>{
     if(data.loading||!esAdmin) return;
     data.asegurarTareasControlStockMensual();
+    data.asegurarValorStockDiario();
   },[data.loading,esAdmin]);
 
   // Detectar pedidos web nuevos y reproducir sonido
@@ -8370,7 +8508,8 @@ export default function App(){
           {data.loading&&modulo!=="venta"
             ?<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:12}}><Spinner/><span style={{color:G.textoSec}}>Cargando datos...</span></div>
             :(<>
-              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
+              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} tipoCambio={data.tipoCambio} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
+              {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
               {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} vendedores={data.vendedores} esAdmin={esAdmin}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
