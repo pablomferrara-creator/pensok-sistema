@@ -1406,14 +1406,30 @@ function useData(toast){
     const items = (conteo.conteos_stock_items||[]).filter(it=>it.stock_contado!==it.stock_sistema);
     if(items.length){
       const idsProductos = items.map(it=>it.producto_id);
-      const{data:productosActuales,error:errActuales}=await supabase.from("productos").select("id,stock").in("id",idsProductos);
+      const{data:productosActuales,error:errActuales}=await supabase.from("productos").select("id,stock,costo").in("id",idsProductos);
       if(errActuales){ console.error("Error leyendo stock actual para aplicar el conteo:",errActuales); toast.err("No se pudo leer el stock actual, no se aplicó nada"); return; }
-      const stockActualPorId = Object.fromEntries((productosActuales||[]).map(p=>[p.id,p.stock]));
+      const actualPorId = Object.fromEntries((productosActuales||[]).map(p=>[p.id,p]));
       for(const item of items){
         const diferencia = item.stock_contado - item.stock_sistema;
-        const stockActual = stockActualPorId[item.producto_id] ?? item.stock_sistema;
+        const actual = actualPorId[item.producto_id];
+        const stockActual = actual?.stock ?? item.stock_sistema;
         await supabase.from("productos").update({stock:stockActual+diferencia}).eq("id",item.producto_id);
       }
+      // Dejar rastro en el historial de abastecimiento, mismo patrón que usan los traspasos
+      // (cantidad con signo, costo del producto) -- así todo movimiento de stock que no es una
+      // venta queda auditable en un solo lugar.
+      try{
+        const filasAbastecimiento = items.map(item=>{
+          const actual = actualPorId[item.producto_id];
+          return{
+            fecha: hoy(), producto_id: item.producto_id, nombre: item.nombre,
+            cantidad: item.stock_contado-item.stock_sistema, costo_unit: actual?.costo||0,
+            proveedor: "Ajuste por inventario", metodo_pago: "Ajuste interno",
+            responsable: aplicadoPor, notas: `Ajuste por conteo de stock #${conteoId} (${conteo.categoria})`,
+          };
+        });
+        await supabase.from("abastecimiento").insert(filasAbastecimiento);
+      }catch(e){ console.warn("No se pudo dejar rastro del ajuste en abastecimiento:",e); }
     }
     const{error}=await supabase.from("conteos_stock").update({
       aplicado:true, aplicado_en:new Date().toISOString(), aplicado_por:aplicadoPor
