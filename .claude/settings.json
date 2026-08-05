@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/Users/pablo/Documents/pensok-sistema/.claude/hooks/backup-app.cjs\" || true",
+            "timeout": 15,
+            "statusMessage": "Guardando backup de App.jsx..."
+          }
+        ]
+      }
+    ]
+  }
+}

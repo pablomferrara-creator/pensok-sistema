@@ -93,6 +93,16 @@ Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubi
 
 El deploy es automático (GitHub → Vercel) y normalmente funciona, pero **al menos una vez el webhook no disparó** un build para un push nuevo (el commit llegó bien a GitHub, Vercel ni siquiera lo mostró en su lista de Deployments). Si después de pushear y esperar unos minutos el sitio sigue sirviendo el bundle viejo, un commit vacío (`git commit --allow-empty`) suele destrabarlo. Para chequear si el deploy ya está activo sin depender del ojo: pedir el HTML de `pensok-sistema.vercel.app`, sacar el nombre del archivo `assets/index-*.js`, y mirar su header `Last-Modified` — si es de antes del último push, todavía no se actualizó.
 
+## Backup automático de App.jsx (reversibilidad local)
+
+Cada vez que Claude edita `src/App.jsx` (Edit/Write/MultiEdit), un hook `PostToolUse` configurado en `.claude/settings.json` copia automáticamente el estado resultante a `backups/App_NNNN.jsx` (numeración secuencial de 4 dígitos, cero-padded). El contador vive en `backups/.counter` y persiste entre sesiones. `backups/` está en `.gitignore` — son copias locales, no viajan a git/GitHub, así el historial de commits queda limpio.
+
+- **Script del hook:** `.claude/hooks/backup-app.cjs` (Node, sin dependencias).
+- **`App_0000.jsx`** es la línea base (estado previo a activar este sistema, 2026-08-05).
+- **Para revertir a una versión anterior:** copiar el `App_NNNN.jsx` deseado sobre `src/App.jsx`. Es instantáneo y no requiere git.
+- **Esto NO reemplaza los commits de git** — git sigue siendo la protección de fondo (historial completo + respaldo en GitHub por si falla el disco). El hook es solo para revertir rápido, sin comandos, un cambio reciente que salió mal.
+- Si se agregan más archivos "críticos" al sistema (además de `App.jsx`), extender el `matcher` del hook y la lógica de `backup-app.cjs` para cubrirlos.
+
 ## Convenciones de estilo y comunicación
 
 - Proveedores: Title Case (primera letra de cada palabra en mayúscula), con excepciones ya mencionadas para siglas y conjunciones.
