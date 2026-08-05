@@ -865,10 +865,20 @@ function useData(toast){
     const fechaHoy = hoy();
     if(historialValorStock.some(h=>h.fecha===fechaHoy)) return;
     const valorArs = productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0);
-    const tc = tipoCambio||USD_RATE;
-    const valorUsd = tc>0 ? valorArs/tc : 0;
+    // Dólar oficial venta del día, misma fuente (dolarapi.com) que usa la pestaña de
+    // Actualizar Precios -- no el tipoCambio en memoria, que no se persiste entre sesiones.
+    let tcOficialVenta = null;
+    try{
+      const res = await fetch("https://dolarapi.com/v1/dolares/oficial");
+      if(res.ok){ const d = await res.json(); tcOficialVenta = d?.venta || null; }
+    }catch(e){ console.warn("No se pudo obtener el dólar oficial para la foto de valor de stock:",e); }
+    if(!tcOficialVenta){
+      console.warn("No se guardó la foto de valor de stock de hoy: no se pudo obtener el dólar oficial (se reintenta la próxima vez que se abra la app).");
+      return;
+    }
+    const valorUsd = valorArs/tcOficialVenta;
     const{error}=await supabase.from("historial_valor_stock").insert({
-      fecha:fechaHoy, valor_ars:Math.round(valorArs), valor_usd:Math.round(valorUsd*100)/100, tipo_cambio_usado:tc
+      fecha:fechaHoy, valor_ars:Math.round(valorArs), valor_usd:Math.round(valorUsd*100)/100, tipo_cambio_usado:tcOficialVenta
     });
     if(error){
       // 23505 = ya existe una fila para hoy (otra sesión la guardó justo antes) -- no es un error real.
@@ -1508,7 +1518,7 @@ function useData(toast){
 // ============================================================
 // MODULO: ANALISIS / DASHBOARD
 // ============================================================
-function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],tipoCambio,onNavegar,onFiltroIngresos,onFiltroEgresos}){
+function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
   const hoyStr=hoy();const mesAct_=mesAct();const anio=new Date().getFullYear().toString();
   const [periodo,setPeriodo]=useState("mes"); // "hoy"|"dia"|"mes"|"mesEsp"|"anio"
   const [paretoOpen,setParetoOpen]=useState(false);
@@ -1901,7 +1911,7 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
         </div>
       </div>
       <div onClick={()=>onNavegar("valor_stock")} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
-        <MetricCard label="Valor stock a costo — click para ver evolución" value={fmt(valorStock)} color={G.azul} sub={tipoCambio?`≈ USD ${fmtNum(Math.round(valorStock/tipoCambio))} al TC actual`:"a costo"} accent={"#4D9EFF33"}/>
+        <MetricCard label="Valor stock a costo — click para ver evolución" value={fmt(valorStock)} color={G.azul} sub="a costo · ver evolución en ARS/USD" accent={"#4D9EFF33"}/>
       </div>
       {alertasStock.length>0&&(
         <div onClick={()=>{onNavegar("productos");setTimeout(()=>{const el=document.getElementById("panel-reposicion");if(el)el.scrollIntoView({behavior:"smooth"});},300);}} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
@@ -8508,7 +8518,7 @@ export default function App(){
           {data.loading&&modulo!=="venta"
             ?<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:12}}><Spinner/><span style={{color:G.textoSec}}>Cargando datos...</span></div>
             :(<>
-              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} tipoCambio={data.tipoCambio} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
+              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
               {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
               {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} vendedores={data.vendedores} esAdmin={esAdmin}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
