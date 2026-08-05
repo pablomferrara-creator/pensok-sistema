@@ -103,6 +103,31 @@ Cada vez que Claude edita `src/App.jsx` (Edit/Write/MultiEdit), un hook `PostToo
 - **Esto NO reemplaza los commits de git** — git sigue siendo la protección de fondo (historial completo + respaldo en GitHub por si falla el disco). El hook es solo para revertir rápido, sin comandos, un cambio reciente que salió mal.
 - Si se agregan más archivos "críticos" al sistema (además de `App.jsx`), extender el `matcher` del hook y la lógica de `backup-app.cjs` para cubrirlos.
 
+## Reversión de esquema Supabase (SQL up/down + changelog)
+
+El backup de `App.jsx` de arriba resuelve la reversión del *código*, pero no la de las
+bases Supabase (Pilar `dupatnbwrgdtxalpqgqi` y Caamaño `kggpwndbdbqfmupiqrqp`) — los
+cambios de esquema son SQL que Pablo corre a mano, sin migraciones automáticas ni "deshacer".
+Si se vuelve el código atrás sin también revertir el esquema, puede romper (columna/tabla
+que el código viejo no espera, o que espera y ya no existe — ya pasó con `telefono` en
+vendedores de Caamaño).
+
+**Convención desde 2026-08-05:** todo cambio de esquema nuevo se entrega como par de
+archivos en `sql/`:
+- `YYYY-MM-DD-descripcion.sql` — el up, igual que antes, se corre a mano en el SQL Editor de Supabase.
+- `YYYY-MM-DD-descripcion.down.sql` — el inverso exacto (drop de lo que el up creó/agregó), con advertencia explícita si implica pérdida de datos.
+
+Cada par queda registrado en **`sql/CHANGELOG.md`**, junto con el commit de git (y el
+`App_NNNN.jsx` cuando aplica) al que corresponde, y si ya se corrió en Pilar/Caamaño.
+
+**Para un pedido tipo "volvé todo a como estaba el [fecha]":**
+1. Mirar `sql/CHANGELOG.md` y ubicar todos los cambios de esquema fechados después de esa fecha.
+2. Mostrarle a Pablo qué `.down.sql` habría que correr en qué proyecto(s), y si implican pérdida de datos — **confirmar antes de tocar la base**, nunca asumir.
+3. Recién con eso resuelto (o descartado a propósito), restaurar `App.jsx` al `App_NNNN.jsx`/commit correspondiente.
+4. El código se puede revertir solo, sin drama; la base nunca se toca sin confirmación explícita.
+
+**Punto pendiente de revisar con Pablo:** si los proyectos Supabase (Pilar y Caamaño) tienen point-in-time recovery / backups automáticos habilitados. Si los tienen, son la red de seguridad real para los datos — mucho más confiable que los `.down.sql` a mano, que solo cubren el esquema, no protegen contra pérdida de datos ya cargados.
+
 ## Convenciones de estilo y comunicación
 
 - Proveedores: Title Case (primera letra de cada palabra en mayúscula), con excepciones ya mencionadas para siglas y conjunciones.
