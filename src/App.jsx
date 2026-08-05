@@ -6829,6 +6829,37 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
     productos.filter(p=>p.activo&&p.categoria===categoriaSel).sort((a,b)=>a.nombre.localeCompare(b.nombre))
   ,[productos,categoriaSel]);
 
+  // Ranking histórico de diferencias por producto, cruzando todos los conteos (aplicados o no) —
+  // para detectar qué productos dan diferencia recurrente y poner foco ahí. Usa diferencia absoluta
+  // como orden principal porque un producto que oscila (+3, -3, +2...) es tan problemático como uno
+  // que siempre falta, aunque el total con signo dé cerca de cero.
+  const rankingDiferencias = useMemo(()=>{
+    const porProducto = {};
+    for(const c of conteosStock){
+      for(const it of (c.conteos_stock_items||[])){
+        const dif = it.stock_contado - it.stock_sistema;
+        if(!porProducto[it.producto_id]){
+          porProducto[it.producto_id] = {
+            producto_id: it.producto_id, nombre: it.nombre, categoria: c.categoria,
+            vecesContado: 0, vecesConDiferencia: 0, diferenciaTotal: 0, diferenciaAbsTotal: 0,
+            ultimaFecha: c.fecha, ultimaDiferencia: dif,
+          };
+        }
+        const reg = porProducto[it.producto_id];
+        reg.vecesContado += 1;
+        if(dif!==0) reg.vecesConDiferencia += 1;
+        reg.diferenciaTotal += dif;
+        reg.diferenciaAbsTotal += Math.abs(dif);
+        if(new Date(c.fecha) >= new Date(reg.ultimaFecha)){
+          reg.ultimaFecha = c.fecha; reg.ultimaDiferencia = dif; reg.nombre = it.nombre; reg.categoria = c.categoria;
+        }
+      }
+    }
+    return Object.values(porProducto)
+      .filter(r=>r.vecesConDiferencia>0)
+      .sort((a,b)=>b.diferenciaAbsTotal-a.diferenciaAbsTotal);
+  },[conteosStock]);
+
   function iniciarCategoria(cat){ setCategoriaSel(cat); setValores({}); }
 
   const faltantes    = productosCategoria.filter(p=>valores[p.id]===undefined||valores[p.id]==="").length;
@@ -7005,6 +7036,7 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
       <div style={{display:"flex",gap:8}}>
         <Btn variant={vista==="historial"?"primary":"secondary"} onClick={()=>setVista("historial")}>Historial</Btn>
         <Btn variant={vista==="nuevo"?"primary":"secondary"}     onClick={()=>setVista("nuevo")}>+ Nuevo conteo</Btn>
+        <Btn variant={vista==="diferencias"?"primary":"secondary"} onClick={()=>setVista("diferencias")}>📊 Diferencias por producto</Btn>
       </div>
 
       {vista==="nuevo"&&(
@@ -7072,6 +7104,34 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
           })}
           {historial.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>Sin conteos registrados todavía</div>}
         </div>
+      )}
+
+      {vista==="diferencias"&&(
+        <Card>
+          <ST>Productos con más diferencia entre lo contado y el sistema</ST>
+          <div style={{fontSize:12,color:G.textoSec,marginBottom:14}}>Suma histórica de todos los conteos (se hayan aplicado o no). Ordenado por diferencia acumulada en valor absoluto — un producto que oscila (a veces de más, a veces de menos) también merece foco, aunque el total con signo dé cerca de cero.</div>
+          {rankingDiferencias.length===0?(
+            <div style={{textAlign:"center",padding:"32px 0",color:G.textoSec}}>Todavía no hay conteos con diferencias registradas</div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:1,maxHeight:520,overflowY:"auto"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 110px 100px 100px 100px",gap:8,padding:"6px 8px",fontSize:10,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>
+                <span>Producto</span><span style={{textAlign:"right"}}>Con diferencia</span><span style={{textAlign:"right"}}>Dif. total</span><span style={{textAlign:"right"}}>Dif. abs.</span><span style={{textAlign:"right"}}>Última vez</span>
+              </div>
+              {rankingDiferencias.map(r=>(
+                <div key={r.producto_id} style={{display:"grid",gridTemplateColumns:"1fr 110px 100px 100px 100px",gap:8,padding:"8px",background:G.sup2,borderRadius:8,fontSize:13,alignItems:"center"}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.nombre}</div>
+                    <div style={{fontSize:11,color:G.textoSec}}>{r.categoria}</div>
+                  </div>
+                  <span style={{textAlign:"right",color:G.textoSec}}>{r.vecesConDiferencia}/{r.vecesContado}</span>
+                  <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:r.diferenciaTotal<0?G.rojo:r.diferenciaTotal>0?G.azul:G.textoSec}}>{r.diferenciaTotal>0?"+":""}{fmtNum(r.diferenciaTotal)}</span>
+                  <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:G.amarillo,fontWeight:600}}>{fmtNum(r.diferenciaAbsTotal)}</span>
+                  <span style={{textAlign:"right",color:G.textoSec,fontSize:12}}>{r.ultimaFecha}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       )}
 
       {/* Modal detalle / aplicar ajuste */}
