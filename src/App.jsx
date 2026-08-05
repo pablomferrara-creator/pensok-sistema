@@ -1394,12 +1394,26 @@ function useData(toast){
     return true;
   }
 
-  // Pisa productos.stock con lo contado en este conteo puntual, y lo marca como aplicado.
+  // Aplica la DIFERENCIA encontrada en el conteo (stock_contado - stock_sistema) sobre
+  // el stock actual del sistema al momento de aplicar -- no pisa con el valor contado
+  // directamente, porque entre que se contó y se aplica pueden haber pasado ventas,
+  // compras o traspasos que ya movieron el stock real. Lee el stock actual fresco de
+  // la base (no del estado en memoria, que puede estar desactualizado) justo antes de
+  // ajustar, para no perder movimientos que pasaron mientras tanto.
   async function aplicarConteoStock(conteoId,aplicadoPor){
     const conteo = conteosStock.find(c=>c.id===conteoId);
     if(!conteo) return;
-    for(const item of (conteo.conteos_stock_items||[])){
-      await supabase.from("productos").update({stock:item.stock_contado}).eq("id",item.producto_id);
+    const items = (conteo.conteos_stock_items||[]).filter(it=>it.stock_contado!==it.stock_sistema);
+    if(items.length){
+      const idsProductos = items.map(it=>it.producto_id);
+      const{data:productosActuales,error:errActuales}=await supabase.from("productos").select("id,stock").in("id",idsProductos);
+      if(errActuales){ console.error("Error leyendo stock actual para aplicar el conteo:",errActuales); toast.err("No se pudo leer el stock actual, no se aplicó nada"); return; }
+      const stockActualPorId = Object.fromEntries((productosActuales||[]).map(p=>[p.id,p.stock]));
+      for(const item of items){
+        const diferencia = item.stock_contado - item.stock_sistema;
+        const stockActual = stockActualPorId[item.producto_id] ?? item.stock_sistema;
+        await supabase.from("productos").update({stock:stockActual+diferencia}).eq("id",item.producto_id);
+      }
     }
     const{error}=await supabase.from("conteos_stock").update({
       aplicado:true, aplicado_en:new Date().toISOString(), aplicado_por:aplicadoPor
