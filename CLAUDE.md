@@ -128,6 +128,20 @@ Cada par queda registrado en **`sql/CHANGELOG.md`**, junto con el commit de git 
 
 **Punto pendiente de revisar con Pablo:** si los proyectos Supabase (Pilar y Caamaño) tienen point-in-time recovery / backups automáticos habilitados. Si los tienen, son la red de seguridad real para los datos — mucho más confiable que los `.down.sql` a mano, que solo cubren el esquema, no protegen contra pérdida de datos ya cargados.
 
+## Backup de datos Supabase (dump diario gratis, sin Pro)
+
+Supabase Free no da backups automáticos (Pro es ~US$50/mes para los dos proyectos, y ni así incluye point-in-time recovery real sin un add-on aparte). Decisión (2026-08-05): en vez de pagar, dump diario programado vía `scripts/db-backup.cjs`.
+
+- **`npx supabase db dump` NO sirve sin Docker Desktop** (lo corre adentro de un contenedor). En vez de eso, `pg_dump` real está instalado localmente (`C:\Program Files\PostgreSQL\18\bin`, vía winget, **solo command-line tools, sin server ni servicio corriendo**) y se invoca directo a través de Git Bash (`C:\Program Files\Git\usr\bin\bash.exe`).
+- Los pipelines (`pg_dump` + `sed`) están en `scripts/pg-dump-schema.sh` y `scripts/pg-dump-data.sh` — son una copia fiel de lo que genera `supabase db dump --dry-run` / `--data-only --dry-run` (CLI 2.111.0), con un typo de esa versión corregido (`--quote-all-identifier` → `--quote-all-identifiers`, sin la 's' pg_dump lo rechaza). Si se reinstala el Supabase CLI y cambia algo, comparar con el dry-run y actualizar estos dos archivos.
+- **Ojo con la conexión:** la conexión directa (`db.<ref>.supabase.co`) es **IPv6-only** y en esta red no resuelve. Hay que usar el **Session Pooler** (`aws-1-sa-east-1.pooler.supabase.com:5432`, usuario `postgres.<project-ref>`) — se consigue en el dashboard de Supabase → botón "Connect" (arriba a la derecha, ya no está en Settings → Database) → pestaña "Session pooler".
+- `scripts/db-backup.cjs` orquesta: lee las dos URLs del `.env`, corre schema+data por cada proyecto, concatena todo en un solo `.sql` con fecha, limpia dumps de más de 21 días, y loguea todo.
+- Guarda los `.sql` en `C:\Users\pablo\OneDrive\pensok-db-backups\{pilar,caamanio}\` — **fuera del repo, fuera de Documents**, adentro de la carpeta OneDrive para que se sincronice solo a la nube privada de esta cuenta, sin pagar nada extra. **Estos dumps incluyen `auth.users` con hashes de password real** — nunca deben ir a git ni compartirse.
+- **Credenciales:** las connection strings (con password, formato pooler) viven SOLO en `C:\Users\pablo\OneDrive\pensok-db-backups\.env` (fuera de git). Ver `scripts/db-backup.env.example` en el repo para el formato — ese archivo de ejemplo no tiene passwords reales.
+- **Tarea programada:** corre sola todos los días a las 3am vía Task Scheduler de Windows (tarea `PensokDbBackup`, `Get-ScheduledTask -TaskName PensokDbBackup` para revisarla). Log en `C:\Users\pablo\OneDrive\pensok-db-backups\backup.log`.
+- **Para restaurar un dump:** es un `.sql` plano — se restaura con `psql <url-pooler> -f archivo.sql` contra un proyecto Supabase (puede ser el mismo u otro nuevo). Esto SÍ requiere `psql` (ya instalado junto con `pg_dump`, mismo `bin`).
+- Es más manual que un restore con un click de Supabase Pro, y como máximo se puede perder hasta un día de datos (lo cargado después del último dump). Si el negocio crece y ese margen deja de ser aceptable, ahí sí se justifica reconsiderar Pro/PITR.
+
 ## Convenciones de estilo y comunicación
 
 - Proveedores: Title Case (primera letra de cada palabra en mayúscula), con excepciones ya mencionadas para siglas y conjunciones.
