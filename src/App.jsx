@@ -5450,10 +5450,21 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             <Div/>
             {/* Stock */}
             <ST>Stock</ST>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <Fi label="Stock actual" value={fStock}    onChange={setFStock}    type="number" min="0" placeholder="0"/>
-              <Fi label="Stock minimo" value={fStockMin} onChange={setFStockMin} type="number" min="0" placeholder="0"/>
-            </div>
+            {editando?(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div>
+                  <div style={{fontSize:11,color:G.textoSec,fontWeight:500,textTransform:"uppercase",letterSpacing:0.5,marginBottom:5}}>Stock actual</div>
+                  <div style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"8px 11px",fontSize:13,color:G.textoSec}}>{fmtNum(editando.stock||0)}</div>
+                  <div style={{fontSize:10,color:G.textoSec,marginTop:4}}>Para sumar/restar stock, hacelo desde Abastecimiento o Control de Stock — así queda registrado el movimiento.</div>
+                </div>
+                <Fi label="Stock minimo" value={fStockMin} onChange={setFStockMin} type="number" min="0" placeholder="0"/>
+              </div>
+            ):(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <Fi label="Stock actual" value={fStock}    onChange={setFStock}    type="number" min="0" placeholder="0"/>
+                <Fi label="Stock minimo" value={fStockMin} onChange={setFStockMin} type="number" min="0" placeholder="0"/>
+              </div>
+            )}
             <Div/>
             {/* Envasado desde un producto a granel */}
             <ST>Envasado desde un producto a granel (opcional)</ST>
