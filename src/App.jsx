@@ -631,6 +631,27 @@ function useData(toast){
     };
     const{data,error}=await supabase.from("egresos").insert(payload).select().single();
     if(error){toast.err("Error al guardar egreso");return;}
+
+    // Si es una compra de productos, crear una tarea de aviso para no olvidarse de cargar
+    // Abastecimiento. A diferencia de la de Control de Stock, esta se tilda a mano (no se
+    // autocompleta por monto) porque el monto cargado casi nunca va a coincidir exacto con
+    // el del egreso por actualizaciones de precio -- el monto se muestra solo como referencia.
+    if(eg.es_compra_productos){
+      try{
+        await supabaseTareas.from("tareas").insert({
+          titulo: `Cargar en Abastecimiento: ${eg.proveedor||"(sin proveedor)"} — ${fmt(data.monto)}`,
+          descripcion: `Egreso #${data.id}: "${data.concepto}". Cargar los productos correspondientes desde Abastecimiento, vinculándolos a esta compra. Tildar cuando esté todo cargado.`,
+          responsable: null,
+          local: localKey,
+          prioridad: "media",
+          fecha_limite: hoy(),
+          proyecto: "Abastecimiento pendiente",
+          estado: "pendiente",
+          creado_por: "Sistema (automático)",
+        });
+      }catch(e){ console.warn("No se pudo crear la tarea de aviso del egreso:",e); }
+    }
+
     toast.ok("Egreso registrado — recordá cargar los pagos");
     await cargar();
     return data;
@@ -3719,7 +3740,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   </>);
 }
 
-function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago}){
+function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago}){
   const [filtroT,setFT]=useState("Todos");
   const [filtroP,setFP]=useState("Todos");
   const [filtroF,setFF]=useState("");
@@ -3755,6 +3776,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedor
   const [fMonto,setFM]=useState(""); const [fMetodo,setFMet]=useState(METODOS_PAGO[0]);
   const [fPagador,setFPag]=useState("Pensok"); const [fFecha,setFFecha]=useState(hoy());
   const [fProv,setFProv]=useState(""); const [fNotas,setFNotas]=useState("");
+  const [fEsCompra,setFEsCompra]=useState(false);
   const [loading,setLoading]=useState(false);
 
   const reembolso=fPagador!=="Pensok";
@@ -3833,10 +3855,11 @@ function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedor
       reembolsado:esInversion?true:false,
       monto_reembolsado:esInversion?montoT:0,
       saldo_pendiente:esInversion?0:montoT,
-      proveedor:fProv,notas:fNotas
+      proveedor:fProv,notas:fNotas,
+      es_compra_productos:fEsCompra
     });
     setLoading(false);setModal(false);
-    setFC("");setFM("");setFNotas("");setFProv("");setFPag("Pensok");
+    setFC("");setFM("");setFNotas("");setFProv("");setFPag("Pensok");setFEsCompra(false);
   }
 
   return(
@@ -3975,6 +3998,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedor
                     {e.reembolso_pendiente&&!e.reembolsado&&<Badge color="amarillo">⏳ Pago pendiente</Badge>}
                     {e.reembolso_pendiente&&!e.reembolsado&&totalPagado>0&&<span style={{fontSize:11,color:G.amarillo}}>Abonado: {fmt(totalPagado)} · Saldo: {fmt((e.saldo_pendiente)||0)}</span>}
                     {e.reembolsado&&<Badge color="verde">✓ Pagado</Badge>}
+                    {e.es_compra_productos&&(()=>{
+                      const cargado = abastecimiento.filter(a=>a.egreso_id===e.id).reduce((s,a)=>s+(a.cantidad||0)*(a.costo_unit||0),0);
+                      return <span style={{fontSize:11,color:G.textoSec}} title="Aproximado -- puede no coincidir exacto por diferencias de precio">📦 Abastecimiento: cargado aprox. {fmt(cargado)} de {fmt(e.monto)}</span>;
+                    })()}
                     {e.notas&&<span style={{fontSize:11,color:G.textoSec,fontStyle:"italic"}}>{e.notas}</span>}
                   </div>
                   {/* Historial de pagos inline */}
@@ -4161,6 +4188,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],onRegistrar,onReembolsar,vendedor
               <Fi label="Proveedor"   value={fProv}    onChange={setFProv}  options={["",...(proveedores||[]).filter(p=>p.activo).map(p=>p.nombre)]}/>
             </div>
             {reembolso&&<div style={{background:"#FFB80011",border:"1px solid #FFB80033",borderRadius:8,padding:"10px 14px",fontSize:12,color:G.amarillo}}>⚡ <strong>{fPagador}</strong> adelantó este gasto. Quedará como reembolso pendiente.</div>}
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13}}>
+              <input type="checkbox" checked={fEsCompra} onChange={e=>setFEsCompra(e.target.checked)}/>
+              Es compra de productos — recordarme cargarlo en Abastecimiento
+            </label>
             <Fi label="Notas" value={fNotas} onChange={setFNotas} rows={2} placeholder="Observaciones..."/>
           </div>
         </Modal>
@@ -5876,7 +5907,7 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
     )}
   </>);
 }
-function ModuloAbastecimiento({productos,abastecimiento,onRegistrar,vendedores,proveedores,onEditar,onEliminar}){
+function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,vendedores,proveedores,onEditar,onEliminar}){
   const [vista,setV]=useState("historial");
   const [prodBusq,setPB]=useState(""); const [prodSelec,setPS]=useState(null);
   const [cantidad,setCant]=useState(""); const [costoUnit,setCU]=useState("");
@@ -5918,13 +5949,25 @@ function ModuloAbastecimiento({productos,abastecimiento,onRegistrar,vendedores,p
   const prodFilt=useMemo(()=>{if(!prodBusq)return[];const q=prodBusq.toLowerCase();return productos.filter(p=>p.activo&&(p.nombre.toLowerCase().includes(q)||p.codigo.toLowerCase().includes(q)));},[prodBusq,productos]);
   const total=(parseFloat(cantidad)||0)*(parseFloat(costoUnit)||0);
   const [fechaAbast, setFechaAbast]=useState(hoy());
+  const [egresoLink, setEgresoLink]=useState("");
   const valido=prodSelec&&cantidad;
+
+  // Compras de productos pendientes de cargar, para el desplegable "a qué compra corresponde".
+  // Prioriza las del mismo proveedor elegido, pero muestra todas las recientes por si acaso.
+  const comprasPendientes = useMemo(()=>{
+    const candidatas = egresos.filter(e=>e.es_compra_productos);
+    const delProveedor = proveedor ? candidatas.filter(e=>e.proveedor===proveedor) : [];
+    const resto = candidatas.filter(e=>!delProveedor.includes(e));
+    return [...delProveedor,...resto]
+      .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))
+      .slice(0,25);
+  },[egresos,proveedor]);
 
   async function registrar(){
     if(!valido)return;setLoading(true);
-    await onRegistrar({fecha:fechaAbast||hoy(),producto_id:prodSelec.id,nombre:prodSelec.nombre,cantidad:parseInt(cantidad),costo_unit:parseFloat(costoUnit)||prodSelec.costo||0,proveedor,metodo_pago:metodo||METODOS_PAGO[0],responsable:resp||"Pensok",notas});
+    await onRegistrar({fecha:fechaAbast||hoy(),producto_id:prodSelec.id,nombre:prodSelec.nombre,cantidad:parseInt(cantidad),costo_unit:parseFloat(costoUnit)||prodSelec.costo||0,proveedor,metodo_pago:metodo||METODOS_PAGO[0],responsable:resp||"Pensok",notas,egreso_id:egresoLink?parseInt(egresoLink):null});
     setLoading(false);setOk(true);
-    setTimeout(()=>{setPS(null);setPB("");setCant("");setNotas("");setOk(false);setV("historial");setFechaAbast(hoy());},2000);
+    setTimeout(()=>{setPS(null);setPB("");setCant("");setNotas("");setOk(false);setV("historial");setFechaAbast(hoy());setEgresoLink("");},2000);
   }
 
   if(ok)return(<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:14}}><div style={{fontSize:44,color:G.verde}}>✓</div><div style={{fontSize:20,fontWeight:600,color:G.verde}}>Ingreso registrado</div></div>);
@@ -5963,6 +6006,10 @@ function ModuloAbastecimiento({productos,abastecimiento,onRegistrar,vendedores,p
               <Fi label="Proveedor"   value={proveedor} onChange={setProv} options={(proveedores||[]).filter(p=>p.activo).map(p=>p.nombre)}/>
               <Fi label="Responsable" value={resp}      onChange={setResp} options={(vendedores||[]).map(v=>v.nombre)}/>
               <Fi label="Fecha del ingreso" value={fechaAbast} onChange={setFechaAbast} type="date"/>
+            </div>
+            <div style={{marginTop:12}}>
+              <Fi label="¿A qué compra corresponde? (opcional)" value={egresoLink} onChange={setEgresoLink}
+                options={[{value:"",label:"— No corresponde a ninguna / no lo sé todavía —"},...comprasPendientes.map(e=>({value:String(e.id),label:`${e.proveedor||"(sin proveedor)"} — ${fmt(e.monto)} — ${e.fecha}`}))]}/>
             </div>
             <div style={{marginTop:12}}><Fi label="Notas" value={notas} onChange={setNotas} placeholder="Ej: descuento por volumen"/></div>
           </Card>
@@ -8789,10 +8836,10 @@ export default function App(){
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
-              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
+              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
-              {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} onRegistrar={data.registrarAbastecimiento} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
+              {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
               {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} devoluciones={data.devoluciones} toast={toast}/>}

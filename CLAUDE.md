@@ -94,6 +94,16 @@ Sección dedicada (nav "Presupuestos", grupo Ventas) para gestionar cotizaciones
 - **Quién puede aprobar/cancelar**: cualquier vendedor logueado, mismo criterio que registrar una venta — no está restringido a admin.
 - Cancelar pide un motivo obligatorio (`motivo_cancelacion`), queda guardado para consulta posterior.
 
+## Recordatorio de Abastecimiento pendiente (link Egresos ↔ Abastecimiento)
+
+Problema que resuelve: al cargar un Egreso que es una compra de productos (ej. "Compra Vulcano $556.566"), es común olvidarse de después ir a Abastecimiento a cargar el detalle producto por producto — sobre todo en compras chicas de 1-2 ítems.
+
+- **Al cargar un Egreso**, checkbox "Es compra de productos". Si se tilda, además de guardar el egreso se crea sola una tarea en Tareas (`proyecto: "Abastecimiento pendiente"`, sin responsable, prioridad media, vence hoy).
+- **A diferencia de la tarea de Control de Stock, esta SÍ se tilda a mano** — a propósito no hay ningún cierre automático por monto. Se decidió así porque en compras grandes el monto cargado en Abastecimiento casi nunca va a coincidir exacto con el del Egreso (actualizaciones de precio entre que se compró y se cargó, redondeos, etc.) — un cierre automático por monto se quedaría "pendiente" para siempre aunque esté todo bien cargado.
+- **Al cargar cada producto en Abastecimiento**, hay un desplegable opcional "¿A qué compra corresponde?" que lista los egresos marcados como compra de productos (prioriza los del mismo proveedor elegido). Esto graba `abastecimiento.egreso_id`.
+- **El monto cargado se muestra como referencia informativa únicamente**, en la lista de Egresos ("📦 Abastecimiento: cargado aprox. $X de $Y") — sumando `cantidad × costo_unit` de todo lo linkeado a ese egreso. No es una verdad exacta ni bloquea nada, es solo una pista visual para saber si falta bastante o poco.
+- El link es opcional en ambos sentidos: un Egreso puede quedar marcado como compra de productos sin que nunca se linkee nada (la tarea queda ahí como recordatorio), y un Abastecimiento puede cargarse sin corresponder a ningún Egreso puntual.
+
 ## Sistema de login y roles
 
 - Login por Supabase Auth (email/password). El rol (`admin` o `local`) se guarda en la tabla `user_roles` (`email` → `rol`), separada de `vendedores`.
