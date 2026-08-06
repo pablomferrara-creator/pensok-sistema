@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
@@ -167,25 +168,54 @@ function Modal({title,onClose,children,footer,maxWidth=520}){return(<div style={
 // Nav superior agrupada: cada grupo es un botón con dropdown de sus tabs (ver App > tabsTodos/GRUPOS_NAV).
 function NavGroupDropdown({label,items,modulo,onSelect}){
   const [open,setOpen]=useState(false);
-  const ref=useRef(null);
+  const [pos,setPos]=useState(null); // {top,left} del menu, calculado desde el boton
+  const btnRef=useRef(null);
+  const menuRef=useRef(null);
+
+  function actualizarPos(){
+    if(btnRef.current){
+      const r=btnRef.current.getBoundingClientRect();
+      setPos({top:r.bottom+4,left:r.left});
+    }
+  }
+
   useEffect(()=>{
-    function onDocClick(e){ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); }
+    function onDocClick(e){
+      if(btnRef.current?.contains(e.target)) return;
+      if(menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
     document.addEventListener("mousedown",onDocClick);
     return ()=>document.removeEventListener("mousedown",onDocClick);
   },[]);
+
+  // El menu se renderiza vía portal (ver abajo) para no quedar recortado por el
+  // overflow-x:auto de la barra de nav en mobile -- por eso hace falta recalcular
+  // su posición en pantalla en vez de usar position:absolute relativo al boton.
+  useEffect(()=>{
+    if(!open) return;
+    actualizarPos();
+    window.addEventListener("resize",actualizarPos);
+    window.addEventListener("scroll",actualizarPos,true);
+    return ()=>{
+      window.removeEventListener("resize",actualizarPos);
+      window.removeEventListener("scroll",actualizarPos,true);
+    };
+  },[open]);
+
   if(items.length===0) return null;
   const activo = items.some(t=>t.id===modulo);
   const alertaTotal = items.reduce((s,t)=>s+(t.alerta||0),0);
   return(
-    <div ref={ref} style={{position:"relative"}}>
-      <button onClick={()=>setOpen(o=>!o)}
+    <div style={{position:"relative"}}>
+      <button ref={btnRef} onClick={()=>setOpen(o=>!o)}
         style={{background:activo?G.verde:"transparent",color:activo?"#000":G.textoSec,border:"none",borderRadius:7,padding:"5px 11px",fontSize:12,fontWeight:activo?600:400,cursor:"pointer",position:"relative",display:"flex",alignItems:"center",gap:4,transition:"all .15s"}}>
         {label}
         <span style={{fontSize:8,opacity:0.7}}>▾</span>
         {alertaTotal>0&&<span style={{position:"absolute",top:2,right:-4,minWidth:14,height:14,background:activo?"#00000055":G.rojo,borderRadius:7,fontSize:9,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{alertaTotal}</span>}
       </button>
-      {open&&(
-        <div style={{position:"absolute",top:"100%",left:0,marginTop:4,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,minWidth:180,zIndex:60,overflow:"hidden",boxShadow:"0 8px 24px #00000055"}}>
+      {open&&pos&&createPortal(
+        <div ref={menuRef} style={{position:"fixed",top:pos.top,left:pos.left,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,minWidth:180,zIndex:500,overflow:"hidden",boxShadow:"0 8px 24px #00000055"}}>
           {items.map(t=>(
             <button key={t.id} onClick={()=>{onSelect(t.id);setOpen(false);}}
               style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,width:"100%",textAlign:"left",background:modulo===t.id?G.borde:"transparent",color:modulo===t.id?G.texto:G.textoSec,border:"none",padding:"9px 12px",fontSize:12,fontWeight:modulo===t.id?600:400,cursor:"pointer"}}>
@@ -193,7 +223,8 @@ function NavGroupDropdown({label,items,modulo,onSelect}){
               {t.alerta>0&&<span style={{minWidth:14,height:14,background:G.rojo,borderRadius:7,fontSize:9,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{t.alerta}</span>}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
