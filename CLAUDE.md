@@ -77,10 +77,22 @@ Si `npm run build` no tira error, el archivo compila. **Siempre correrlo antes d
 Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubir". Tablas nuevas por local (`conteos_stock`, `conteos_stock_items` — igual que `devoluciones`, no compartidas entre Pilar y Caamaño porque el stock es independiente).
 
 - **Flujo**: cualquier usuario elige una categoría → cuenta todos los productos activos de esa categoría (o imprime antes una planilla en PDF con el logo de Pensok para recorrer el local a mano) → guarda el conteo. Esto queda como **registro histórico**, sin tocar `productos.stock` todavía.
-- **Aplicar el ajuste** (pisar `productos.stock` con lo contado) es **solo admin**, desde el detalle del conteo, y avisa si el stock de sistema cambió desde que se contó (por ventas nuevas en el medio) antes de confirmar.
+- **Aplicar el ajuste es solo admin**, desde el detalle del conteo. Desde el 2026-08-05 **NO pisa `productos.stock` con lo contado** — calcula la diferencia (`stock_contado - stock_sistema`) y la aplica sobre el stock actual leído fresco de la base al momento de aplicar, para no perder ventas/compras/traspasos que hayan pasado entre que se contó y se aplicó. También deja rastro en `abastecimiento` (proveedor "Ajuste por inventario") por cada producto ajustado, para que quede auditable junto con el resto de los movimientos de stock.
 - **Admin puede corregir un conteo ya guardado pero todavía no aplicado** (botón "Editar conteo" en el detalle) — para cuando un vendedor se confundió de producto al contar. Esto no toca stock real, solo el registro del conteo.
 - **Aviso automático a los admins**: al guardar un conteo se crea sola una tarea en Tareas (`proyecto: "Control de Stock (ajuste)"`, prioridad alta, vence hoy, sin responsable asignado) para que algún admin revise y aplique el ajuste. Esa tarea **no se puede tildar a mano desde Tareas** — el checkbox queda deshabilitado a propósito; se cierra sola cuando se aplica el ajuste correspondiente (se vincula por texto, buscando `"Conteo #<id> "` dentro de la descripción de la tarea).
 - **Tarea mensual automática**: además, cada vez que un admin carga la app se chequea si ya existe la tarea "Control de stock mensual — {Mes} {Año}" para el mes en curso (por local); si no existe, se crea sola (`proyecto: "Control de Stock (mensual)"`). Esta sí es una tarea normal, tildable a mano — es solo un recordatorio, no tiene una acción que la cierre automáticamente.
+- **"Diferencias por producto"** (pestaña dentro del módulo): ranking histórico cruzando TODOS los conteos (aplicados o no), por producto — cuántas veces dio diferencia, total con signo, total en valor absoluto, última vez. Sirve para detectar qué productos fallan más seguido. No necesita tabla nueva, usa `stock_sistema`/`stock_contado` que ya se guardaban.
+
+## Presupuestos
+
+Sección dedicada (nav "Presupuestos", grupo Ventas) para gestionar cotizaciones. Tablas nuevas por local (`presupuestos`, `presupuesto_items` — mismo criterio que `conteos_stock`/`devoluciones`, no compartidas entre Pilar y Caamaño).
+
+- **Al generar el PDF desde Nueva Venta** (`generarPresupuesto`), ahora también se guarda automáticamente en `presupuestos` ANTES de armar el PDF, y el número correlativo (`PRE-AAAAMMDD-00X`, mismo patrón que `NC-` de notas de crédito) queda impreso en el badge del PDF. Si falla el guardado, el PDF se genera igual (no bloquea la venta) pero avisa con un toast que no quedó registrado.
+- **Generar un presupuesto NO toca stock** — recién se descuenta si se aprueba.
+- **Aprobar reusa `registrarVenta`** (la misma función que usa Nueva Venta) con los items/cliente/vendedor/descuento/modalidad guardados — no hay una segunda implementación de "crear venta". Solo pide método de pago y cobrado/entregado en el momento de aprobar, porque un presupuesto no los tiene definidos todavía. La venta resultante queda linkeada por `presupuestos.venta_id` y aparece en Ingresos como cualquier otra.
+- **Vencimiento**: es puramente visual/derivado (`presupuestoVencido()`, calculado al mostrar, no hay ningún job corriendo en segundo plano) — un presupuesto `pendiente` con más de 15 días desde su fecha se muestra como "Vencido" y **no se puede aprobar directo** (hay que generar uno nuevo con precios actuales); sí se puede cancelar.
+- **Quién puede aprobar/cancelar**: cualquier vendedor logueado, mismo criterio que registrar una venta — no está restringido a admin.
+- Cancelar pide un motivo obligatorio (`motivo_cancelacion`), queda guardado para consulta posterior.
 
 ## Sistema de login y roles
 

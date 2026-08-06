@@ -332,6 +332,7 @@ function useData(toast){
   const [vendedoresOtro, setVendedoresOtro] = useState([]); // vendedores del OTRO local (para la lista de responsables)
   const [conteosStock,   setConteosStock]   = useState([]);
   const [historialValorStock, setHistorialValorStock] = useState([]);
+  const [presupuestos, setPresupuestos] = useState([]);
   const [loading,        setLoading]        = useState(true);
 
   async function cargar(){
@@ -373,6 +374,11 @@ function useData(toast){
       const{data:hvs}=await supabase.from("historial_valor_stock").select("*").order("fecha",{ascending:true});
       setHistorialValorStock(hvs||[]);
     }catch(e){ console.warn("No se pudo cargar el historial de valor de stock:",e); setHistorialValorStock([]); }
+    // Presupuestos — si la tabla aún no existe, queda vacío sin romper
+    try{
+      const{data:preds}=await supabase.from("presupuestos").select("*, presupuesto_items(*)").order("creado_en",{ascending:false});
+      setPresupuestos(preds||[]);
+    }catch(e){ console.warn("No se pudieron cargar los presupuestos:",e); setPresupuestos([]); }
     // Count real de ventas
     const{count}=await supabase.from("ventas").select("*",{count:"exact",head:true});
     setTotalVentas(count||0);
@@ -420,7 +426,7 @@ function useData(toast){
       cobrado:venta.cobrado, entregado:venta.entregado,
       total,ganancia
     }).select().single();
-    if(vErr){toast.err("Error al registrar venta");return;}
+    if(vErr){toast.err("Error al registrar venta");return null;}
 
     // 2. Insertar items
     if(items.length>0){
@@ -477,6 +483,70 @@ function useData(toast){
     }
 
     toast.ok("Venta registrada");
+    await cargar();
+    return vData.id;
+  }
+
+  // ── PRESUPUESTOS ─────────────────────────────────────────
+  // items: [{productoId, nombre, cantidad, precio, costo}] -- mismo formato que usa registrarVenta.
+  async function crearPresupuesto({clienteId,clienteNombre,vendedor,tipoLista,modalidad,descuento,items}){
+    if(!items||!items.length) return null;
+    const total = calcTotalItems(items,descuento||0);
+    const ganancia = calcGananciaItems(items,descuento||0);
+    const hoyStr = hoy();
+    // Nº correlativo del día: PRE-AAAAMMDD-00X, mismo patrón que las notas de crédito.
+    const nHoy = presupuestos.filter(p=>p.fecha===hoyStr).length + 1;
+    const nroPresupuesto = `PRE-${hoyStr.replace(/-/g,"")}-${String(nHoy).padStart(3,"0")}`;
+
+    const{data:pData,error:pErr}=await supabase.from("presupuestos").insert({
+      nro_presupuesto:nroPresupuesto, fecha:hoyStr, hora:new Date().toTimeString().slice(0,8),
+      cliente_id:clienteId||null, cliente_nombre:clienteNombre||"",
+      vendedor:vendedor||"", tipo_lista:tipoLista||"minorista", modalidad:modalidad||"En el local",
+      descuento:descuento||0, total, ganancia_estimada:ganancia,
+    }).select().single();
+    if(pErr){ console.error("Error creando presupuesto:",pErr); toast.err("Error al guardar el presupuesto"); return null; }
+
+    const filas = items.map(i=>({
+      presupuesto_id:pData.id, producto_id:i.productoId||null, nombre:i.nombre,
+      cantidad:i.cantidad, precio:i.precio, costo:i.costo||0
+    }));
+    const{error:iErr}=await supabase.from("presupuesto_items").insert(filas);
+    if(iErr){ console.error("Error guardando items del presupuesto:",iErr); toast.err("Se guardó el presupuesto pero no se pudieron guardar los items"); }
+
+    await cargar();
+    return nroPresupuesto;
+  }
+
+  // Convierte un presupuesto pendiente en una venta real -- reusa registrarVenta para no
+  // duplicar la lógica de descuento de stock, cuenta corriente, etc. Pide método de pago y
+  // cobrado/entregado porque el presupuesto todavía no los tiene definidos.
+  async function aprobarPresupuesto(presupuestoId,{metodoPago,cobrado,entregado},aprobadoPor){
+    const pres = presupuestos.find(p=>p.id===presupuestoId);
+    if(!pres||pres.estado!=="pendiente") return;
+    const items = (pres.presupuesto_items||[]).map(i=>({
+      productoId:i.producto_id, nombre:i.nombre, cantidad:i.cantidad, precio:i.precio, costo:i.costo||0
+    }));
+    const ventaId = await registrarVenta({
+      fecha:hoy(), hora:new Date().toTimeString().slice(0,8),
+      clienteId:pres.cliente_id, clienteNombre:pres.cliente_nombre,
+      vendedor:pres.vendedor, metodoPago, modalidad:pres.modalidad,
+      descuento:pres.descuento, cobrado, entregado,
+    },items);
+    if(!ventaId){ toast.err("No se pudo crear la venta -- el presupuesto sigue pendiente"); return; }
+    const{error}=await supabase.from("presupuestos").update({
+      estado:"aprobado", venta_id:ventaId, aprobado_por:aprobadoPor, aprobado_en:new Date().toISOString()
+    }).eq("id",presupuestoId);
+    if(error){ console.error("Error marcando presupuesto como aprobado:",error); toast.err("Se creó la venta pero no se pudo marcar el presupuesto como aprobado"); }
+    else toast.ok("Presupuesto aprobado -- venta registrada en Ingresos");
+    await cargar();
+  }
+
+  async function cancelarPresupuesto(presupuestoId,motivo,canceladoPor){
+    const{error}=await supabase.from("presupuestos").update({
+      estado:"cancelado", motivo_cancelacion:motivo||"", cancelado_por:canceladoPor, cancelado_en:new Date().toISOString()
+    }).eq("id",presupuestoId);
+    if(error){ console.error("Error cancelando presupuesto:",error); toast.err("Error al cancelar el presupuesto"); return; }
+    toast.ok("Presupuesto cancelado");
     await cargar();
   }
 
@@ -1512,7 +1582,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto};
 }
 
 // ============================================================
@@ -2178,7 +2248,7 @@ function ModuloValorStock({historial=[]}){
 // ============================================================
 // MODULO: NUEVA VENTA
 // ============================================================
-function ModuloVenta({clientes,productos,onRegistrar,vendedores,esAdmin=true}){
+function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedores,esAdmin=true,toast}){
   const METODOS_VENTA = ["Efectivo","Transferencia MP","Transferencia Banco","Debito MP","Debito Banco","Credito MP","Credito Banco","Credito Cuotas Banco"];
   const DESC_POR_METODO = {
     "Efectivo":10,
@@ -2264,6 +2334,11 @@ function ModuloVenta({clientes,productos,onRegistrar,vendedores,esAdmin=true}){
   async function generarPresupuesto(){
     if(items.length===0)return;
     setGenPres(true);
+    const nroPresupuesto = await onCrearPresupuesto({
+      clienteId:clienteId||null, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL",
+      vendedor, tipoLista:tipoCliente, modalidad, descuento:parseFloat(descuento)||0, items
+    });
+    if(!nroPresupuesto) toast.err("El presupuesto se generó pero no se pudo guardar en el sistema");
     if(!window.jspdf){
       await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s);});
     }
@@ -2296,14 +2371,15 @@ function ModuloVenta({clientes,productos,onRegistrar,vendedores,esAdmin=true}){
     doc.text(`Tel: ${LI.telefono}  ·  ${LI.instagram}`,46,30);
     // Badge presupuesto
     doc.setFillColor(...azulClaro);
-    doc.roundedRect(W-58,8,52,18,3,3,'F');
+    doc.roundedRect(W-58,8,52,24,3,3,'F');
     doc.setFont('helvetica','bold');
     doc.setFontSize(11);
     doc.setTextColor(...blanco);
-    doc.text('PRESUPUESTO',W-32,16,{align:'center'});
-    doc.setFont('helvetica','normal');
+    doc.text('PRESUPUESTO',W-32,15,{align:'center'});
     doc.setFontSize(8);
-    doc.text(fechaStr+' '+horaStr+'hs',W-32,22,{align:'center'});
+    doc.text(nroPresupuesto||'',W-32,21,{align:'center'});
+    doc.setFont('helvetica','normal');
+    doc.text(fechaStr+' '+horaStr+'hs',W-32,27,{align:'center'});
 
     // Datos cliente y vendedor
     let y=50;
@@ -2674,6 +2750,192 @@ function ModuloVenta({clientes,productos,onRegistrar,vendedores,esAdmin=true}){
       </Card>
     </div>
     </>
+  );
+}
+
+// ============================================================
+// MODULO: PRESUPUESTOS
+// ============================================================
+const METODOS_VENTA_APROBAR = ["Efectivo","Transferencia MP","Transferencia Banco","Debito MP","Debito Banco","Credito MP","Credito Banco","Credito Cuotas Banco"];
+
+function venceElPresupuesto(fecha){
+  const d = new Date(fecha+"T00:00:00");
+  d.setDate(d.getDate()+15);
+  return d.toISOString().slice(0,10);
+}
+function presupuestoVencido(p){
+  return p.estado==="pendiente" && venceElPresupuesto(p.fecha) < hoy();
+}
+
+function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],vendedoresOtro=[],usuarioEmail="",esAdmin=true}){
+  const miNombre = useMemo(()=>{
+    const email=(usuarioEmail||"").trim().toLowerCase();
+    if(!email) return "";
+    const todos=[...(vendedores||[]),...(vendedoresOtro||[])];
+    const match=todos.find(v=>(v.email||"").trim().toLowerCase()===email);
+    return match?.nombre || "";
+  },[vendedores,vendedoresOtro,usuarioEmail]);
+  const responsableActual = miNombre || usuarioEmail || "—";
+
+  const [filtro,setFiltro]     = useState("activos"); // activos|pendiente|vencido|aprobado|cancelado
+  const [verPres,setVerPres]   = useState(null);
+  const [accion,setAccion]     = useState(null); // null|"aprobar"|"cancelar"
+  const [metodoPago,setMetodoPago] = useState(METODOS_VENTA_APROBAR[0]);
+  const [cobrado,setCobrado]   = useState(true);
+  const [entregado,setEntregado] = useState(true);
+  const [motivo,setMotivo]     = useState("");
+  const [procesando,setProcesando] = useState(false);
+
+  const conteos = useMemo(()=>({
+    pendiente: presupuestos.filter(p=>p.estado==="pendiente"&&!presupuestoVencido(p)).length,
+    vencido:   presupuestos.filter(p=>presupuestoVencido(p)).length,
+    aprobado:  presupuestos.filter(p=>p.estado==="aprobado").length,
+    cancelado: presupuestos.filter(p=>p.estado==="cancelado").length,
+  }),[presupuestos]);
+
+  const filtrados = useMemo(()=>{
+    const lista = presupuestos.filter(p=>{
+      if(filtro==="activos") return p.estado==="pendiente";
+      if(filtro==="vencido") return presupuestoVencido(p);
+      if(filtro==="pendiente") return p.estado==="pendiente"&&!presupuestoVencido(p);
+      return p.estado===filtro;
+    });
+    return [...lista].sort((a,b)=>new Date(b.creado_en)-new Date(a.creado_en));
+  },[presupuestos,filtro]);
+
+  function abrir(p){ setVerPres(p); setAccion(null); setMetodoPago(METODOS_VENTA_APROBAR[0]); setCobrado(true); setEntregado(true); setMotivo(""); }
+  function cerrar(){ setVerPres(null); setAccion(null); }
+
+  async function confirmarAprobar(){
+    setProcesando(true);
+    await onAprobar(verPres.id,{metodoPago,cobrado,entregado},responsableActual);
+    setProcesando(false);
+    cerrar();
+  }
+  async function confirmarCancelar(){
+    setProcesando(true);
+    await onCancelar(verPres.id,motivo,responsableActual);
+    setProcesando(false);
+    cerrar();
+  }
+
+  const FILTROS = [
+    {k:"activos",   l:"Pendientes"},
+    {k:"vencido",   l:"Vencidos"},
+    {k:"aprobado",  l:"Aprobados"},
+    {k:"cancelado", l:"Cancelados"},
+    {k:"todos",     l:"Todos"},
+  ];
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div className="psk-grid-4" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        <MetricCard label="Pendientes" value={fmtNum(conteos.pendiente)} color={G.azul}/>
+        <MetricCard label="Vencidos" value={fmtNum(conteos.vencido)} color={conteos.vencido>0?G.amarillo:undefined}/>
+        <MetricCard label="Aprobados" value={fmtNum(conteos.aprobado)} color={G.verde}/>
+        <MetricCard label="Cancelados" value={fmtNum(conteos.cancelado)} color={G.rojo}/>
+      </div>
+
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {FILTROS.map(f=>(
+          <Btn key={f.k} small variant={filtro===f.k?"primary":"secondary"} onClick={()=>setFiltro(f.k)}>{f.l}</Btn>
+        ))}
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {filtrados.map(p=>{
+          const vencido = presupuestoVencido(p);
+          const items = p.presupuesto_items||[];
+          return(
+            <Card key={p.id} style={{padding:"12px 18px",cursor:"pointer"}} onClick={()=>abrir(p)}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:14}}>{p.nro_presupuesto} — {p.cliente_nombre||"Consumidor Final"}</div>
+                  <div style={{fontSize:12,color:G.textoSec,marginTop:2}}>{p.fecha} · {p.vendedor} · {items.length} items · {fmt(p.total)}</div>
+                </div>
+                {p.estado==="cancelado"&&<Badge color="rojo">Cancelado</Badge>}
+                {p.estado==="aprobado"&&<Badge color="verde">Aprobado</Badge>}
+                {p.estado==="pendiente"&&vencido&&<Badge color="amarillo">Vencido</Badge>}
+                {p.estado==="pendiente"&&!vencido&&<Badge color="azul">Pendiente</Badge>}
+              </div>
+            </Card>
+          );
+        })}
+        {filtrados.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:G.textoSec}}>Sin presupuestos en esta categoría</div>}
+      </div>
+
+      {verPres&&(()=>{
+        const vencido = presupuestoVencido(verPres);
+        const items = verPres.presupuesto_items||[];
+        return(
+          <Modal title={`${verPres.nro_presupuesto} — ${verPres.fecha}`} onClose={cerrar} maxWidth={620}
+            footer={accion?(<>
+              <Btn variant="secondary" onClick={()=>setAccion(null)} disabled={procesando}>Volver</Btn>
+              {accion==="aprobar"&&<Btn variant="primary" disabled={procesando} onClick={confirmarAprobar}>{procesando?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Aprobando...</span>:"Confirmar y crear venta"}</Btn>}
+              {accion==="cancelar"&&<Btn variant="danger" disabled={procesando||!motivo.trim()} onClick={confirmarCancelar}>{procesando?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Cancelando...</span>:"Confirmar cancelación"}</Btn>}
+            </>):(<>
+              <Btn variant="secondary" onClick={cerrar}>Cerrar</Btn>
+              {verPres.estado==="pendiente"&&<Btn variant="danger" onClick={()=>setAccion("cancelar")}>Cancelar presupuesto</Btn>}
+              {verPres.estado==="pendiente"&&!vencido&&<Btn variant="primary" onClick={()=>setAccion("aprobar")}>Aprobar → crear venta</Btn>}
+            </>)}>
+            <div style={{fontSize:12,color:G.textoSec,marginBottom:10}}>
+              Cliente <strong style={{color:G.texto}}>{verPres.cliente_nombre||"Consumidor Final"}</strong> · Vendedor <strong style={{color:G.texto}}>{verPres.vendedor}</strong> · Lista <strong style={{color:G.texto}}>{verPres.tipo_lista}</strong>
+            </div>
+            {verPres.estado==="pendiente"&&vencido&&(
+              <div style={{marginBottom:10,padding:"8px 12px",background:"#FFB80011",border:"1px solid #FFB80033",borderRadius:8,fontSize:12,color:G.amarillo}}>
+                Este presupuesto venció el {venceElPresupuesto(verPres.fecha)} (validez de 15 días). Los precios pueden estar desactualizados — para aprobarlo, generar uno nuevo desde Nueva Venta. Todavía se puede cancelar.
+              </div>
+            )}
+            {verPres.estado==="aprobado"&&(
+              <div style={{marginBottom:10,padding:"8px 12px",background:"#00C48C11",border:"1px solid #00C48C33",borderRadius:8,fontSize:12,color:G.verde}}>
+                Aprobado por {verPres.aprobado_por} el {verPres.aprobado_en?new Date(verPres.aprobado_en).toLocaleString("es-AR"):""} — ya figura como venta en Ingresos.
+              </div>
+            )}
+            {verPres.estado==="cancelado"&&(
+              <div style={{marginBottom:10,padding:"8px 12px",background:"#FF4D6A11",border:"1px solid #FF4D6A33",borderRadius:8,fontSize:12,color:G.rojo}}>
+                Cancelado por {verPres.cancelado_por} el {verPres.cancelado_en?new Date(verPres.cancelado_en).toLocaleString("es-AR"):""}{verPres.motivo_cancelacion?<> — Motivo: {verPres.motivo_cancelacion}</>:""}
+              </div>
+            )}
+
+            {!accion&&(
+              <div style={{display:"flex",flexDirection:"column",gap:1,maxHeight:340,overflowY:"auto"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 60px 90px 90px",gap:8,padding:"6px 8px",fontSize:10,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>
+                  <span>Producto</span><span style={{textAlign:"right"}}>Cant.</span><span style={{textAlign:"right"}}>Precio</span><span style={{textAlign:"right"}}>Subtotal</span>
+                </div>
+                {items.map(it=>(
+                  <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 60px 90px 90px",gap:8,padding:"6px 8px",fontSize:13,borderTop:`1px solid ${G.borde}22`}}>
+                    <span>{it.nombre}</span>
+                    <span style={{textAlign:"right"}}>{fmtNum(it.cantidad)}</span>
+                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace"}}>{fmt(it.precio)}</span>
+                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",fontWeight:500}}>{fmt(it.precio*it.cantidad)}</span>
+                  </div>
+                ))}
+                <div style={{display:"flex",justifyContent:"space-between",padding:"10px 8px",borderTop:`1px solid ${G.borde}`,marginTop:4,fontSize:14,fontWeight:600}}>
+                  <span>Total {verPres.descuento>0?`(desc. ${verPres.descuento}%)`:""}</span><span>{fmt(verPres.total)}</span>
+                </div>
+              </div>
+            )}
+
+            {accion==="aprobar"&&(
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                <div style={{fontSize:12,color:G.textoSec}}>Esto va a crear una venta en Ingresos por {fmt(verPres.total)} y descontar el stock correspondiente. Faltan estos datos que el presupuesto todavía no tiene:</div>
+                <Fi label="Método de pago" value={metodoPago} onChange={setMetodoPago} options={METODOS_VENTA_APROBAR.map(m=>({value:m,label:m}))}/>
+                <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer"}}><input type="checkbox" checked={cobrado} onChange={e=>setCobrado(e.target.checked)}/> Ya está cobrado</label>
+                <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer"}}><input type="checkbox" checked={entregado} onChange={e=>setEntregado(e.target.checked)}/> Ya está entregado</label>
+              </div>
+            )}
+
+            {accion==="cancelar"&&(
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <div style={{fontSize:12,color:G.textoSec}}>Motivo de la cancelación (obligatorio):</div>
+                <textarea value={motivo} onChange={e=>setMotivo(e.target.value)} rows={3} placeholder="Ej: el cliente no lo confirmó, precios vencidos, etc."
+                  style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"8px 10px",color:G.texto,fontSize:13,outline:"none",resize:"vertical"}}/>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
+    </div>
   );
 }
 
@@ -8450,6 +8712,7 @@ export default function App(){
   const alertasStock    = data.productos.filter(p=>p.activo&&estadoStock(p)!=="ok").length;
   const pendientesCobro = data.ventasConItems.filter(v=>!v.cobrado).length;
   const reembolsosPend  = data.egresos.filter(e=>e.reembolso_pendiente&&!e.reembolsado).length;
+  const presupuestosPend = (data.presupuestos||[]).filter(p=>p.estado==="pendiente").length;
   const pedidosWebPend  = data.pedidosWeb?.length||0;
   // Badge de Tareas: pendientes vencidas o que vencen hoy, ya filtradas por el local activo
   const tareasAlerta = (data.tareas||[]).filter(t=>
@@ -8460,6 +8723,7 @@ export default function App(){
 
   const tabsTodos=[
     {id:"venta",          label:"Nueva venta",    alerta:0},
+    {id:"presupuestos",   label:"Presupuestos",   alerta:presupuestosPend, grupo:"ventas"},
     {id:"ingresos",       label:"Ingresos",       alerta:pendientesCobro,  grupo:"ventas"},
     {id:"pedidos_web",    label:"Pedidos web",    alerta:pedidosWebPend,   grupo:"ventas", soloPilar:true},
     {id:"clientes",       label:"Clientes",       alerta:0,                grupo:"ventas"},
@@ -8520,7 +8784,8 @@ export default function App(){
             :(<>
               {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
               {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
-              {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} vendedores={data.vendedores} esAdmin={esAdmin}/>}
+              {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} onCrearPresupuesto={data.crearPresupuesto} vendedores={data.vendedores} esAdmin={esAdmin} toast={toast}/>}
+              {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
               {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
