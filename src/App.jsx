@@ -790,7 +790,7 @@ function useData(toast){
   async function guardarProducto(datos,id=null){
     if(id){
       // Solo campos válidos de la tabla productos
-      const CAMPOS_PRODUCTO = ["codigo","nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock","stock_min","proveedor","activo","vendidos","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo"];
+      const CAMPOS_PRODUCTO = ["codigo","nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock","stock_min","proveedor","activo","vendidos","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo","granel_id","consumo_granel"];
       const datosLimpios = Object.fromEntries(Object.entries(datos).filter(([k])=>CAMPOS_PRODUCTO.includes(k)));
       const{error}=await supabase.from("productos").update(datosLimpios).eq("id",id);
       if(error){toast.err("Error al actualizar producto");return;}
@@ -800,6 +800,9 @@ function useData(toast){
         try{
           const prod = productos.find(p=>p.id===id);
           if(prod?.codigo){
+            // granel_id/consumo_granel NO se replican: granel_id es un id numérico interno de
+            // esta base, en Caamaño ese mismo número puede apuntar a un producto distinto.
+            // Si hace falta el mismo vínculo en Caamaño, se configura ahí directamente.
             const CAMPOS_REPLICAR = ["nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock_min","proveedor","activo","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo"];
             const datosReplica = Object.fromEntries(Object.entries(datosLimpios).filter(([k])=>CAMPOS_REPLICAR.includes(k)));
             if(Object.keys(datosReplica).length>0){
@@ -859,6 +862,23 @@ function useData(toast){
         stock:prod.stock+datos.cantidad,
         costo:datos.costo_unit
       }).eq("id",prod.id);
+      // Si este producto se envasa desde un producto a granel (ej. bidones de Cloro 10L
+      // que salen del vinner "CLORO LIQUIDO x Litro"), descontar del granel lo consumido,
+      // y dejarlo como movimiento propio en Abastecimiento para que quede trazable.
+      if(prod.granel_id&&prod.consumo_granel>0){
+        const granel=productos.find(p=>p.id===prod.granel_id);
+        if(granel){
+          const litrosConsumidos=datos.cantidad*prod.consumo_granel;
+          await supabase.from("productos").update({stock:granel.stock-litrosConsumidos}).eq("id",granel.id);
+          await supabase.from("abastecimiento").insert({
+            fecha:datos.fecha||hoy(), producto_id:granel.id, nombre:granel.nombre,
+            cantidad:-litrosConsumidos, costo_unit:granel.costo||0,
+            proveedor:"Envasado interno", metodo_pago:"Envasado interno",
+            responsable:datos.responsable||"Pensok",
+            notas:`Envasado en ${prod.nombre} (${datos.cantidad} u. × ${prod.consumo_granel})`,
+          });
+        }
+      }
     }
     toast.ok("Ingreso de mercaderia registrado");
     await cargar();
@@ -1267,6 +1287,11 @@ function useData(toast){
       if(prod){
         const diff=stockNuevo-stockAnterior;
         await supabase.from("productos").update({stock:Math.max(0,prod.stock+diff),costo:datos.costo_unit}).eq("id",productoId);
+        // Corregir también el consumo del granel vinculado, en la misma proporción del ajuste.
+        if(prod.granel_id&&prod.consumo_granel>0){
+          const granel=productos.find(p=>p.id===prod.granel_id);
+          if(granel) await supabase.from("productos").update({stock:granel.stock-diff*prod.consumo_granel}).eq("id",granel.id);
+        }
       }
     }
     toast.ok("Ingreso actualizado");await cargar();
@@ -1276,7 +1301,14 @@ function useData(toast){
     // Revertir stock
     if(productoId){
       const prod=productos.find(p=>p.id===productoId);
-      if(prod) await supabase.from("productos").update({stock:(prod.stock||0)-cantidad}).eq("id",prod.id);
+      if(prod){
+        await supabase.from("productos").update({stock:(prod.stock||0)-cantidad}).eq("id",prod.id);
+        // Devolver al granel vinculado lo que este ingreso había consumido.
+        if(prod.granel_id&&prod.consumo_granel>0){
+          const granel=productos.find(p=>p.id===prod.granel_id);
+          if(granel) await supabase.from("productos").update({stock:granel.stock+cantidad*prod.consumo_granel}).eq("id",granel.id);
+        }
+      }
     }
     toast.ok("Ingreso eliminado");await cargar();
   }
@@ -4589,6 +4621,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   const [fStock,setFStock]=useState(""); const [fStockMin,setFStockMin]=useState("");
   const [fProv,setFProv]=useState("");
   const [fIva,setFIva]=useState("21"); const [fDescProv,setFDescProv]=useState("0");
+  const [fGranelId,setFGranelId]=useState(""); const [fConsumoGranel,setFConsumoGranel]=useState("");
   const [loading,setLoading]=useState(false);
 
   // Calcular precios en tiempo real
@@ -4838,12 +4871,14 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     setFProv(p.proveedor||"");
     setFIva(String(p.iva_pct||21));
     setFDescProv(String(p.descuento_proveedor||0));
+    setFGranelId(p.granel_id?String(p.granel_id):"");
+    setFConsumoGranel(p.consumo_granel?String(p.consumo_granel):"");
     setModal(true);
   }
   function abrirNuevo(){
     setEditando(null);setFK("");setFN("");setFCat(CATEGORIAS[0]);setFMon("ARS");
     setFCosto("");setFGanMin("");setFGanMay("");setFStock("");setFStockMin("");
-    setFProv("");setFIva("21");setFDescProv("0");setModal(true);
+    setFProv("");setFIva("21");setFDescProv("0");setFGranelId("");setFConsumoGranel("");setModal(true);
   }
 
   // Validacion codigo duplicado en tiempo real
@@ -4860,7 +4895,9 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       stock:parseInt(fStock)||0, stock_min:parseInt(fStockMin)||0,
       proveedor:fProv, activo:true,
       iva_pct:parseFloat(fIva)||21,
-      descuento_proveedor:parseFloat(fDescProv)||0
+      descuento_proveedor:parseFloat(fDescProv)||0,
+      granel_id:fGranelId?parseInt(fGranelId):null,
+      consumo_granel:parseFloat(fConsumoGranel)||0
     };
     await onGuardar(datos,editando?.id||null);
     setLoading(false);setModal(false);
@@ -5416,6 +5453,15 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <Fi label="Stock actual" value={fStock}    onChange={setFStock}    type="number" min="0" placeholder="0"/>
               <Fi label="Stock minimo" value={fStockMin} onChange={setFStockMin} type="number" min="0" placeholder="0"/>
+            </div>
+            <Div/>
+            {/* Envasado desde un producto a granel */}
+            <ST>Envasado desde un producto a granel (opcional)</ST>
+            <div style={{fontSize:11,color:G.textoSec,marginTop:-6}}>Para productos que se envasan de a poco desde un vinner/bidón grande (ej. Cloro 5L sale del vinner "Cloro Liquido x Litro"). Al cargar un ingreso de este producto en Abastecimiento, se descuenta automáticamente del producto a granel elegido.</div>
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
+              <Fi label="Se envasa desde" value={fGranelId} onChange={setFGranelId}
+                options={[{value:"",label:"— Ninguno —"},...productos.filter(p=>p.id!==editando?.id).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>({value:String(p.id),label:p.nombre}))]}/>
+              <Fi label="Litros por unidad" value={fConsumoGranel} onChange={setFConsumoGranel} type="number" min="0" placeholder="Ej: 5"/>
             </div>
           </div>
         </Modal>
