@@ -4255,6 +4255,12 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                       const totalDescRecibido = descuentosEgreso.filter(d=>d.egreso_id===e.id).reduce((s,d)=>s+(d.monto||0),0);
                       return totalDescRecibido>0 ? <span style={{fontSize:11,color:G.verde}}>💸 Descuento recibido: {fmt(totalDescRecibido)}</span> : null;
                     })()}
+                    {(()=>{
+                      const totalComision = pagosDe.reduce((s,p)=>s+(p.comision_plataforma||0),0);
+                      if(totalComision>0) return <Badge color="gris">Comisión {fmt(totalComision)}</Badge>;
+                      const faltaCargar = pagosDe.some(p=>METODOS_CON_COMISION_EG.includes(p.metodo_pago)&&!(p.comision_plataforma>0));
+                      return faltaCargar ? <span style={{background:"#FFB80022",color:G.amarillo,border:"1px solid #FFB80055",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>⚠ Sin comisión</span> : null;
+                    })()}
                     {e.notas&&<span style={{fontSize:11,color:G.textoSec,fontStyle:"italic"}}>{e.notas}</span>}
                   </div>
                   {/* Historial de pagos inline */}
