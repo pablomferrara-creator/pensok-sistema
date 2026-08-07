@@ -1006,8 +1006,17 @@ function useData(toast){
     const fechaLimite = `${mesActual}-${String(ultimoDia).padStart(2,"0")}`;
     let creadas = false;
     for(const loc of ["pilar","camanio"]){
-      const yaExiste = tareas.some(t=>t.proyecto===PROYECTO_CONTROL_STOCK && t.local===loc && (t.fecha_limite||"").startsWith(mesActual));
+      const tareasDeEsteLocal = tareas.filter(t=>t.proyecto===PROYECTO_CONTROL_STOCK && t.local===loc);
+      const yaExiste = tareasDeEsteLocal.some(t=>(t.fecha_limite||"").startsWith(mesActual));
       if(yaExiste) continue;
+      // Cada dos meses, no todos los meses: solo crear si pasaron al menos 2 meses
+      // desde la última tarea de este tipo para este local.
+      const ultimaFecha = tareasDeEsteLocal.map(t=>t.fecha_limite).filter(Boolean).sort().pop();
+      if(ultimaFecha){
+        const [uy,um] = ultimaFecha.split("-").map(Number);
+        const mesesTranscurridos = (y-uy)*12 + (m-um);
+        if(mesesTranscurridos < 2) continue;
+      }
       const{error}=await supabaseTareas.from("tareas").insert({
         titulo: `Control de stock mensual — ${nombreMes} ${y}`,
         descripcion: "Contar el stock físico de todas las categorías del mes. Se puede hacer de a poco (una categoría por vez) desde Control de Stock.",
