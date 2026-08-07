@@ -359,6 +359,7 @@ function useData(toast){
   const [anioStats,      setAnioStats]      = useState({facturacion:0,ganancia:0,cantidad:0});
   const [pedidosWeb,     setPedidosWeb]     = useState([]);
   const [pagosEgreso,    setPagosEgreso]    = useState([]);
+  const [descuentosEgreso, setDescuentosEgreso] = useState([]);
   const [tareas,         setTareas]         = useState([]);
   const [vendedoresOtro, setVendedoresOtro] = useState([]); // vendedores del OTRO local (para la lista de responsables)
   const [conteosStock,   setConteosStock]   = useState([]);
@@ -382,6 +383,11 @@ function useData(toast){
     // Cargar pagos parciales de egresos
     const{data:pegs}=await supabase.from("pagos_egreso").select("*").order("fecha",{ascending:false});
     setPagosEgreso(pegs||[]);
+    // Descuentos de proveedor recibidos sobre egresos ya pagados — si la tabla aún no existe, queda vacío sin romper
+    try{
+      const{data:degs}=await supabase.from("descuentos_egreso").select("*").order("fecha",{ascending:false});
+      setDescuentosEgreso(degs||[]);
+    }catch(e){ console.warn("No se pudieron cargar los descuentos de egreso:",e); setDescuentosEgreso([]); }
     // Cargar devoluciones (notas de crédito) con sus items — si la tabla aún no existe, queda vacío sin romper
     const{data:devs}=await supabase.from("devoluciones").select("*, devolucion_items(*)").order("fecha",{ascending:false});
     setDevoluciones(devs||[]);
@@ -760,6 +766,27 @@ function useData(toast){
     }
     toast.ok("Pago eliminado");await cargar();
   }
+
+  // Descuento que un proveedor devuelve en plata real, días después de haber pagado un
+  // egreso completo -- no toca el egreso ni el pago original, queda como evento propio
+  // con su fecha/monto/método reales para que el Libro de Movimientos sume bien.
+  async function registrarDescuentoEgreso(egresoId,{fecha,monto,metodoPago,notas},registradoPor){
+    if(!monto||monto<=0){ toast.err("El monto del descuento tiene que ser mayor a 0"); return; }
+    const{error}=await supabase.from("descuentos_egreso").insert({
+      egreso_id:egresoId, fecha:fecha||hoy(), monto, metodo_pago:metodoPago,
+      notas:notas||"", registrado_por:registradoPor,
+    });
+    if(error){ console.error("Error registrando descuento de egreso:",error); toast.err("Error al registrar el descuento"); return; }
+    toast.ok("Descuento registrado");
+    await cargar();
+  }
+  async function eliminarDescuentoEgreso(id){
+    const{error}=await supabase.from("descuentos_egreso").delete().eq("id",id);
+    if(error){ toast.err("Error al eliminar el descuento"); return; }
+    toast.ok("Descuento eliminado");
+    await cargar();
+  }
+
   async function marcarReembolsado(id, pago){
     // pago = {monto, metodo_pago, fecha, concepto}
     const egreso = egresos.find(e=>e.id===id);
@@ -1700,7 +1727,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso};
 }
 
 // ============================================================
@@ -3917,7 +3944,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   </>);
 }
 
-function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago}){
+function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onRegistrarDescuento,onEliminarDescuento}){
   const [filtroT,setFT]=useState("Todos");
   const [filtroP,setFP]=useState("Todos");
   const [filtroF,setFF]=useState("");
@@ -3965,6 +3992,11 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],onRegistrar,onR
   const [nuevoPagoMetodo, setNuevoPagoMetodo]=useState("");
   const [nuevoPagoNotas, setNuevoPagoNotas]=useState("");
   const [guardandoPago, setGuardandoPago]=useState(false);
+  const [nuevoDescFecha,setNuevoDescFecha]=useState(hoy());
+  const [nuevoDescMonto,setNuevoDescMonto]=useState("");
+  const [nuevoDescMetodo,setNuevoDescMetodo]=useState(METODOS_PAGO[0]);
+  const [nuevoDescNotas,setNuevoDescNotas]=useState("");
+  const [guardandoDesc,setGuardandoDesc]=useState(false);
   // Si llega un filtro inicial desde el dashboard, activar el filtro de reembolsos pendientes
   useEffect(()=>{
     if(filtroInicial==="aReembolsar"){
@@ -4179,6 +4211,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],onRegistrar,onR
                       const cargado = abastecimiento.filter(a=>a.egreso_id===e.id).reduce((s,a)=>s+(a.cantidad||0)*(a.costo_unit||0),0);
                       return <span style={{fontSize:11,color:G.textoSec}} title="Aproximado -- puede no coincidir exacto por diferencias de precio">📦 Abastecimiento: cargado aprox. {fmt(cargado)} de {fmt(e.monto)}</span>;
                     })()}
+                    {(()=>{
+                      const totalDescRecibido = descuentosEgreso.filter(d=>d.egreso_id===e.id).reduce((s,d)=>s+(d.monto||0),0);
+                      return totalDescRecibido>0 ? <span style={{fontSize:11,color:G.verde}}>💸 Descuento recibido: {fmt(totalDescRecibido)}</span> : null;
+                    })()}
                     {e.notas&&<span style={{fontSize:11,color:G.textoSec,fontStyle:"italic"}}>{e.notas}</span>}
                   </div>
                   {/* Historial de pagos inline */}
@@ -4334,6 +4370,54 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],onRegistrar,onR
                 </div>
               </div>
             )}
+
+            {/* Descuentos recibidos del proveedor (plata real, después de haber pagado) */}
+            {(()=>{
+              const descs = descuentosEgreso.filter(d=>d.egreso_id===modalPagos.id).sort((a,b)=>a.fecha>b.fecha?1:-1);
+              const totalDesc = descs.reduce((s,d)=>s+(d.monto||0),0);
+              return(
+                <div style={{borderTop:`1px solid ${G.borde}`,paddingTop:14}}>
+                  <div style={{fontSize:11,fontWeight:600,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Descuentos recibidos del proveedor</div>
+                  {descs.length>0&&(
+                    <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+                      {descs.map(d=>(
+                        <div key={d.id} style={{background:"#00C48C11",border:`1px solid #00C48C33`,borderRadius:8,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                          <div>
+                            <div style={{fontSize:13,fontWeight:600,color:G.verde,fontFamily:"DM Mono,monospace"}}>+{fmt(d.monto)}</div>
+                            <div style={{fontSize:11,color:G.textoSec}}>{d.fecha} · {d.metodo_pago}{d.notas?` · ${d.notas}`:""}</div>
+                          </div>
+                          {esAdmin&&<button onClick={async()=>{await onEliminarDescuento(d.id);}} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}}>✕</button>}
+                        </div>
+                      ))}
+                      <div style={{padding:"6px 12px",display:"flex",justifyContent:"space-between",fontSize:12}}>
+                        <span style={{color:G.textoSec}}>Total descontado</span>
+                        <span style={{fontFamily:"DM Mono,monospace",fontWeight:700,color:G.verde}}>{fmt(totalDesc)}</span>
+                      </div>
+                    </div>
+                  )}
+                  <div style={{fontSize:11,color:G.textoSec,marginBottom:8}}>Para cuando el proveedor te devuelve plata real días después de haber pagado (no toca el pago ya registrado, queda como movimiento propio).</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                      <Fi label="Monto ($)" value={nuevoDescMonto} onChange={setNuevoDescMonto} type="number" placeholder="0"/>
+                      <Fi label="Fecha recibido" value={nuevoDescFecha} onChange={setNuevoDescFecha} type="date"/>
+                    </div>
+                    <Fi label="Método (cómo te lo devolvieron)" value={nuevoDescMetodo} onChange={setNuevoDescMetodo} options={METODOS_PAGO}/>
+                    <Fi label="Notas (opcional)" value={nuevoDescNotas} onChange={setNuevoDescNotas} placeholder="Ej: descuento por pronto pago"/>
+                    <Btn full variant="secondary" disabled={!nuevoDescMonto||parseFloat(nuevoDescMonto)<=0||guardandoDesc} onClick={async()=>{
+                      setGuardandoDesc(true);
+                      await onRegistrarDescuento(modalPagos.id,{
+                        fecha:nuevoDescFecha, monto:parseFloat(nuevoDescMonto),
+                        metodoPago:nuevoDescMetodo, notas:nuevoDescNotas,
+                      });
+                      setNuevoDescMonto("");setNuevoDescNotas("");setNuevoDescFecha(hoy());
+                      setGuardandoDesc(false);
+                    }}>
+                      {guardandoDesc?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:"+ Registrar descuento"}
+                    </Btn>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </Modal>
       )}
@@ -6310,7 +6394,7 @@ const BOLSILLOS = [
   {key:"ahorro",     label:"Ahorro"},
 ];
 
-function ModuloCaja({ventas,egresos,pagosEgreso=[],devoluciones=[],toast}){
+function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devoluciones=[],toast}){
   const [notas,       setNotas]      = useState("");
   const [loading,     setLoading]    = useState(false);
   const [cierres,     setCierres]    = useState([]);
@@ -6794,6 +6878,20 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],devoluciones=[],toast}){
             concepto:`${d.nro_nota||"Nota crédito"} · Devolución - ${d.cliente_nombre||"Consumidor Final"}`,
             metodo:d.metodo_devolucion, monto:d.monto_total, billetera,
             origen:"Devolución",
+          });
+        });
+
+        // 9. Descuentos de proveedor recibidos en plata real sobre egresos ya pagados —
+        // entra como ingreso, en su fecha y billetera reales (no se toca el egreso ni el
+        // pago original, que ya quedaron reflejados arriba con el monto completo).
+        descuentosEgreso.forEach(d=>{
+          const eg = egresos.find(e=>e.id===d.egreso_id);
+          const billetera = MP_METODOS.includes(d.metodo_pago)?"mp":BANCO_METODOS.includes(d.metodo_pago)?"banco":"caja_chica";
+          movs.push({
+            id:`de-${d.id}`, fecha:d.fecha, tipo:"ingreso",
+            concepto:`Descuento de proveedor${eg?` - ${eg.concepto}`:""}`,
+            metodo:d.metodo_pago, monto:d.monto, billetera,
+            origen:"Descuento de proveedor",
           });
         });
 
@@ -9038,13 +9136,13 @@ export default function App(){
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
-              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
+              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
-              {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
+              {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} descuentosEgreso={data.descuentosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
               {modulo==="tareas"         && <ModuloTareas         tareas={data.tareas} responsables={data.responsables} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} onGuardar={data.guardarTarea} onCambiarEstado={data.cambiarEstadoTarea} onEliminar={data.eliminarTarea} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="configuracion"  && <ModuloConfiguracion  vendedores={data.vendedores} onGuardar={data.guardarVendedor} onToggle={data.toggleVendedor} proveedores={data.proveedores} onGuardProv={data.guardarProveedor} onToggleProv={data.toggleProveedor} productos={data.productos} tipoCambio={data.tipoCambio} onActualizarTC={data.actualizarTipoCambio} onActualizarPct={data.actualizarPorcentaje} onActualizarCSV={data.actualizarDesdeCSV}/>}
             </>)

@@ -120,6 +120,15 @@ Problema que resuelve: productos como el Cloro Líquido se compran en un vinner 
 - **Pendiente a futuro (no implementado a propósito, para no complicar el alcance):** al cargar el envasado, además de descontar los litros del granel, también descontar el envase vacío usado (ej. 1 bidón de 10L) de su propio stock. Cuando se quiera encarar, el mismo mecanismo de `granel_id`/`consumo_granel` podría extenderse o duplicarse para "envase_id"/consumo de envase.
 - **Antes de prender el link de un producto nuevo, recomendar un recuento físico real por Control de Stock** — el stock actual del granel puede estar desactualizado desde antes de tener este mecanismo (envasados previos que nunca se descontaron).
 
+## Descuentos de proveedor sobre egresos ya pagados
+
+Problema que resuelve: a veces se paga un egreso completo y días después el proveedor devuelve parte en plata real (ej. descuento por pronto pago). Antes no había forma de registrar eso sin tocar el egreso o el pago original, lo que descuadraba el Libro de Movimientos.
+
+- **Tabla nueva `descuentos_egreso`** (por local): fecha, egreso vinculado, monto, método (cómo se recibió: mismos `METODOS_PAGO` que el resto), notas. Se carga desde el modal "Pagos" del egreso (botón "+ Registrar descuento"), independiente de si el egreso ya está saldado o no.
+- **No modifica el egreso ni `pagos_egreso`** — el pago original sigue reflejando el monto completo que salió ese día (correcto: eso fue lo que realmente pagaste). El descuento es un evento propio, con su propia fecha/método reales.
+- **Se suma al Libro de Movimientos como un `ingreso` más** (fuente #9 en `ModuloCaja`, junto a cobros de venta/traspasos/etc.), en la billetera que corresponda según el método elegido — así la caja da bien en el día real en que entró la plata, no en el día del pago original.
+- Solo contempla devoluciones en **plata real** (efectivo/transferencia/etc.) — si algún proveedor empieza a dar notas de crédito para descontar en la próxima compra en vez de devolver plata, eso es un caso distinto (no debería sumarse acá, porque no es caja real todavía) y habría que pensarlo aparte.
+
 ## Sistema de login y roles
 
 - Login por Supabase Auth (email/password). El rol (`admin` o `local`) se guarda en la tabla `user_roles` (`email` → `rol`), separada de `vendedores`.
