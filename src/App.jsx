@@ -1733,7 +1733,7 @@ function useData(toast){
 // ============================================================
 // MODULO: ANALISIS / DASHBOARD
 // ============================================================
-function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
+function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],descuentosEgreso=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
   const hoyStr=hoy();const mesAct_=mesAct();const anio=new Date().getFullYear().toString();
   const [periodo,setPeriodo]=useState("mes"); // "hoy"|"dia"|"mes"|"mesEsp"|"anio"
   const [paretoOpen,setParetoOpen]=useState(false);
@@ -1772,8 +1772,11 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   const cantVentas   = periodo==="anio" ? anioStats.cantidad    : vSel.length;
   const pctGanancia=facturacion>0?Math.round(gananciaNeta/facturacion*100):0;
   const ticketProm=cantVentas>0?Math.round(facturacion/cantVentas):0;
-  const gastosFijos=eSel.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0),0);
-  const gastosVar=eSel.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0),0);
+  // Neto de descuentos de proveedor recibidos sobre ese egreso (ej. descuento por pronto
+  // pago) -- el costo real fue siempre el neto, aunque el descuento haya llegado después.
+  const descXEgreso = id => descuentosEgreso.filter(d=>d.egreso_id===id).reduce((s,d)=>s+(d.monto||0),0);
+  const gastosFijos=eSel.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id),0);
+  const gastosVar=eSel.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id),0);
   const gananciaReal=gananciaNeta-gastosFijos;
   const pctGananciaReal=facturacion>0?Math.round(gananciaReal/facturacion*100):0;
 
@@ -4026,7 +4029,8 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   const egresosMesSinInv=egresosMes.filter(e=>e.tipo!=="Inversión inicial");
   const inversionesMes=egresosMes.filter(e=>e.tipo==="Inversión inicial");
   const totalMes=egresosMesSinInv.reduce((s,e)=>s+(e.monto||0),0);
-  const totalMesPagado=egresosMesSinInv.filter(e=>e.pagador==="Pensok"||(e.reembolsado===true)).reduce((s,e)=>s+(e.monto||0),0);
+  const descXEgresoMes = id => descuentosEgreso.filter(d=>d.egreso_id===id).reduce((s,d)=>s+(d.monto||0),0);
+  const totalMesPagado=egresosMesSinInv.filter(e=>e.pagador==="Pensok"||(e.reembolsado===true)).reduce((s,e)=>s+(e.monto||0)-descXEgresoMes(e.id),0);
   const totalInversionesMes=inversionesMes.reduce((s,e)=>s+(e.monto||0),0);
   const nombresVend=(vendedores||[]).map(v=>v.nombre);
   // Derivar pagadores reales con reembolsos pendientes (no solo vendedores)
@@ -4311,6 +4315,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
               <div style={{textAlign:"right"}}>
                 <div style={{fontSize:11,color:G.textoSec}}>Total del egreso</div>
                 <div style={{fontFamily:"DM Mono,monospace",fontWeight:700,fontSize:16,color:G.rojo}}>{fmt(modalPagos.monto)}</div>
+                {(()=>{
+                  const totalDesc = descuentosEgreso.filter(d=>d.egreso_id===modalPagos.id).reduce((s,d)=>s+(d.monto||0),0);
+                  return totalDesc>0 ? <div style={{fontSize:11,color:G.verde,marginTop:2}}>Neto con descuentos: {fmt(modalPagos.monto-totalDesc)}</div> : null;
+                })()}
               </div>
             </div>
 
@@ -9130,7 +9138,7 @@ export default function App(){
           {data.loading&&modulo!=="venta"
             ?<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:12}}><Spinner/><span style={{color:G.textoSec}}>Cargando datos...</span></div>
             :(<>
-              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
+              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} descuentosEgreso={data.descuentosEgreso} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
               {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
               {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} onCrearPresupuesto={data.crearPresupuesto} vendedores={data.vendedores} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}

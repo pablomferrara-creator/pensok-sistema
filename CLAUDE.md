@@ -128,6 +128,11 @@ Problema que resuelve: a veces se paga un egreso completo y días después el pr
 - **No modifica el egreso ni `pagos_egreso`** — el pago original sigue reflejando el monto completo que salió ese día (correcto: eso fue lo que realmente pagaste). El descuento es un evento propio, con su propia fecha/método reales.
 - **Se suma al Libro de Movimientos como un `ingreso` más** (fuente #9 en `ModuloCaja`, junto a cobros de venta/traspasos/etc.), en la billetera que corresponda según el método elegido — así la caja da bien en el día real en que entró la plata, no en el día del pago original.
 - Solo contempla devoluciones en **plata real** (efectivo/transferencia/etc.) — si algún proveedor empieza a dar notas de crédito para descontar en la próxima compra en vez de devolver plata, eso es un caso distinto (no debería sumarse acá, porque no es caja real todavía) y habría que pensarlo aparte.
+- **`egresos.monto` NUNCA se toca por un descuento** — sigue siendo el monto nominal/original del gasto (2026-08-07, a propósito, para no perder el registro histórico real). Donde SÍ se descuenta, restando `descuentos_egreso` vinculados:
+  - **Dashboard** (`ModuloAnalisis`): `gastosFijos`/`gastosVar` (y por lo tanto "Ganancia Real") se calculan netos de descuentos — el costo real de un gasto siempre fue el neto, aunque el descuento haya llegado después.
+  - **Egresos → "Gastos este mes"** (`totalMesPagado`): también neto. El sub-label "Total devengado" (`totalMes`) queda BRUTO a propósito — es el compromiso nominal, no lo que efectivamente salió.
+  - **Modal "Pagos" del egreso**: muestra "Total del egreso" bruto (como siempre) + una línea "Neto con descuentos" debajo, si hay alguno cargado.
+  - Si se agrega un nuevo lugar del código que sume `egresos.monto` como "costo real", chequear si también necesita restar `descuentos_egreso` para no sobrestimar el gasto.
 
 ## Sistema de login y roles
 
