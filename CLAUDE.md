@@ -132,8 +132,18 @@ Problema que resuelve: a veces se paga un egreso completo y días después el pr
 - **`egresos.monto` NUNCA se toca por un descuento** — sigue siendo el monto nominal/original del gasto (2026-08-07, a propósito, para no perder el registro histórico real). Donde SÍ se descuenta, restando `descuentos_egreso` vinculados:
   - **Dashboard** (`ModuloAnalisis`): `gastosFijos`/`gastosVar` (y por lo tanto "Ganancia Real") se calculan netos de descuentos — el costo real de un gasto siempre fue el neto, aunque el descuento haya llegado después.
   - **Egresos → "Gastos este mes"** (`totalMesPagado`): también neto. El sub-label "Total devengado" (`totalMes`) queda BRUTO a propósito — es el compromiso nominal, no lo que efectivamente salió.
-  - **Modal "Pagos" del egreso**: muestra "Total del egreso" bruto (como siempre) + una línea "Neto con descuentos" debajo, si hay alguno cargado.
-  - Si se agrega un nuevo lugar del código que sume `egresos.monto` como "costo real", chequear si también necesita restar `descuentos_egreso` para no sobrestimar el gasto.
+  - **Modal "Pagos" del egreso**: muestra "Total del egreso" bruto (como siempre) + el desglose de descuentos/comisiones y un "Neto real" debajo, si hay alguno cargado (ver también la sección de comisiones, abajo).
+  - Si se agrega un nuevo lugar del código que sume `egresos.monto` como "costo real", chequear si también necesita restar `descuentos_egreso` (y sumar comisiones, ver abajo) para no sub/sobrestimar el gasto.
+
+## Comisión de plataforma al pagar un egreso
+
+Mismo concepto que `ventas.comision_plataforma`, pero **invertido**: en ingresos la comisión reduce lo que cobrás (cobrás $10.000, te acreditan $9.500); en egresos hace que salga **más** plata de tu billetera de la que le debías al proveedor (le debías $10.000, pagaste por una vía con comisión, de tu cuenta salieron $10.500 — el proveedor solo recibió $10.000, la diferencia te la cobró la plataforma a vos).
+
+- **Se guarda por PAGO individual** (`pagos_egreso.comision_plataforma`), no por egreso completo — a diferencia de ventas (que es un cobro único), un egreso puede pagarse en varias partes con métodos distintos, y cada pago puede tener o no comisión según cómo se hizo ese pago puntual.
+- **Aparece en "Registrar pago"** (modal "Pagos" del egreso) solo cuando el método elegido es de los que cobran comisión (`METODOS_CON_COMISION_EG` — mismo listado que usa Ingresos para ventas, pero declarado aparte porque cada uno vive en su propio componente, no hay una lista compartida a nivel de módulo).
+- **NO cuenta para saldar la deuda con el proveedor** — `monto_reembolsado`/`saldo_pendiente` del egreso se calculan solo con `pago.monto`, la comisión es un costo aparte.
+- **Suma al Libro de Movimientos**: el monto que sale de la billetera en la fuente #5 (`ModuloCaja`) es `pago.monto + pago.comision_plataforma`, no solo `pago.monto`.
+- **Suma a los indicadores de gastos** (mismo lugar que resta `descuentos_egreso`, ver arriba): Dashboard (`gastosFijos`/`gastosVar`) y "Gastos este mes" en Egresos.
 
 ## Sistema de login y roles
 

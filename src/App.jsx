@@ -720,7 +720,7 @@ function useData(toast){
   }
 
   async function registrarPagoEgreso(egresoId, pago){
-    // pago = {fecha, monto, metodo_pago, notas}
+    // pago = {fecha, monto, metodo_pago, notas, comision_plataforma}
     const egreso = egresos.find(e=>e.id===egresoId);
     if(!egreso){toast.err("Egreso no encontrado");return;}
     const pagosAnteriores = pagosEgreso.filter(p=>p.egreso_id===egresoId).reduce((s,p)=>s+(p.monto||0),0);
@@ -728,12 +728,16 @@ function useData(toast){
     const totalEgreso = egreso.monto||0;
     const saldado = nuevoTotal >= totalEgreso;
     // Insertar el pago en pagos_egreso
+    // La comisión NO cuenta para saldar la deuda con el proveedor (nuevoTotal/saldado usan
+    // solo pago.monto) -- es un costo aparte que hace que salga más plata de la billetera de
+    // la que efectivamente se le debía al proveedor. Se refleja en el Libro de Movimientos.
     const{error:pErr}=await supabase.from("pagos_egreso").insert({
       egreso_id: egresoId,
       fecha: pago.fecha,
       monto: pago.monto,
       metodo_pago: pago.metodo_pago || egreso.metodo_pago,
       notas: pago.notas||"",
+      comision_plataforma: pago.comision_plataforma||0,
     });
     if(pErr){toast.err("Error al registrar pago: "+pErr.message);return;}
     // Actualizar saldos en el egreso
@@ -1759,7 +1763,7 @@ function useData(toast){
 // ============================================================
 // MODULO: ANALISIS / DASHBOARD
 // ============================================================
-function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],descuentosEgreso=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
+function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],descuentosEgreso=[],pagosEgreso=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
   const hoyStr=hoy();const mesAct_=mesAct();const anio=new Date().getFullYear().toString();
   const [periodo,setPeriodo]=useState("mes"); // "hoy"|"dia"|"mes"|"mesEsp"|"anio"
   const [paretoOpen,setParetoOpen]=useState(false);
@@ -1801,8 +1805,11 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   // Neto de descuentos de proveedor recibidos sobre ese egreso (ej. descuento por pronto
   // pago) -- el costo real fue siempre el neto, aunque el descuento haya llegado después.
   const descXEgreso = id => descuentosEgreso.filter(d=>d.egreso_id===id).reduce((s,d)=>s+(d.monto||0),0);
-  const gastosFijos=eSel.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id),0);
-  const gastosVar=eSel.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id),0);
+  // Comisiones de plataforma pagadas al saldar ese egreso -- al revés que el descuento,
+  // suman: el costo real fue mayor al nominal porque la plataforma cobró de más por pagar así.
+  const comisionXEgreso = id => pagosEgreso.filter(p=>p.egreso_id===id).reduce((s,p)=>s+(p.comision_plataforma||0),0);
+  const gastosFijos=eSel.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id)+comisionXEgreso(e.id),0);
+  const gastosVar=eSel.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id)+comisionXEgreso(e.id),0);
   const gananciaReal=gananciaNeta-gastosFijos;
   const pctGananciaReal=facturacion>0?Math.round(gananciaReal/facturacion*100):0;
 
@@ -4020,7 +4027,9 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   const [nuevoPagoMonto, setNuevoPagoMonto]=useState("");
   const [nuevoPagoMetodo, setNuevoPagoMetodo]=useState("");
   const [nuevoPagoNotas, setNuevoPagoNotas]=useState("");
+  const [nuevoPagoComision, setNuevoPagoComision]=useState("");
   const [guardandoPago, setGuardandoPago]=useState(false);
+  const METODOS_CON_COMISION_EG = ["Transferencia MP","Transferencia Banco","Debito MP","Debito Banco","Credito MP","Credito Banco","Credito Cuotas Banco"];
   const [nuevoDescFecha,setNuevoDescFecha]=useState(hoy());
   const [nuevoDescMonto,setNuevoDescMonto]=useState("");
   const [nuevoDescMetodo,setNuevoDescMetodo]=useState(METODOS_PAGO[0]);
@@ -4056,7 +4065,8 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   const inversionesMes=egresosMes.filter(e=>e.tipo==="Inversión inicial");
   const totalMes=egresosMesSinInv.reduce((s,e)=>s+(e.monto||0),0);
   const descXEgresoMes = id => descuentosEgreso.filter(d=>d.egreso_id===id).reduce((s,d)=>s+(d.monto||0),0);
-  const totalMesPagado=egresosMesSinInv.filter(e=>e.pagador==="Pensok"||(e.reembolsado===true)).reduce((s,e)=>s+(e.monto||0)-descXEgresoMes(e.id),0);
+  const comisionXEgresoMes = id => pagosEgreso.filter(p=>p.egreso_id===id).reduce((s,p)=>s+(p.comision_plataforma||0),0);
+  const totalMesPagado=egresosMesSinInv.filter(e=>e.pagador==="Pensok"||(e.reembolsado===true)).reduce((s,e)=>s+(e.monto||0)-descXEgresoMes(e.id)+comisionXEgresoMes(e.id),0);
   const totalInversionesMes=inversionesMes.reduce((s,e)=>s+(e.monto||0),0);
   const nombresVend=(vendedores||[]).map(v=>v.nombre);
   // Derivar pagadores reales con reembolsos pendientes (no solo vendedores)
@@ -4343,7 +4353,15 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                 <div style={{fontFamily:"DM Mono,monospace",fontWeight:700,fontSize:16,color:G.rojo}}>{fmt(modalPagos.monto)}</div>
                 {(()=>{
                   const totalDesc = descuentosEgreso.filter(d=>d.egreso_id===modalPagos.id).reduce((s,d)=>s+(d.monto||0),0);
-                  return totalDesc>0 ? <div style={{fontSize:11,color:G.verde,marginTop:2}}>Neto con descuentos: {fmt(modalPagos.monto-totalDesc)}</div> : null;
+                  const totalComision = pagosEgreso.filter(p=>p.egreso_id===modalPagos.id).reduce((s,p)=>s+(p.comision_plataforma||0),0);
+                  if(!totalDesc&&!totalComision) return null;
+                  return(
+                    <>
+                      {totalDesc>0&&<div style={{fontSize:11,color:G.verde,marginTop:2}}>− Descuentos: {fmt(totalDesc)}</div>}
+                      {totalComision>0&&<div style={{fontSize:11,color:G.rojo,marginTop:2}}>+ Comisiones: {fmt(totalComision)}</div>}
+                      <div style={{fontSize:11,color:G.textoSec,marginTop:2,fontWeight:600}}>Neto real: {fmt(modalPagos.monto-totalDesc+totalComision)}</div>
+                    </>
+                  );
                 })()}
               </div>
             </div>
@@ -4356,7 +4374,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                   {pagosEgreso.filter(p=>p.egreso_id===modalPagos.id).sort((a,b)=>a.fecha>b.fecha?1:-1).map(p=>(
                     <div key={p.id} style={{background:G.sup2,borderRadius:8,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                       <div>
-                        <div style={{fontSize:13,fontWeight:600,color:G.verde,fontFamily:"DM Mono,monospace"}}>{fmt(p.monto)}</div>
+                        <div style={{fontSize:13,fontWeight:600,color:G.verde,fontFamily:"DM Mono,monospace"}}>{fmt(p.monto)}{(p.comision_plataforma||0)>0&&<span style={{color:G.rojo,fontWeight:500}}> +{fmt(p.comision_plataforma)} comisión</span>}</div>
                         <div style={{fontSize:11,color:G.textoSec}}>{p.fecha} · {p.metodo_pago}{p.notas?` · ${p.notas}`:""}</div>
                       </div>
                       {esAdmin&&<button onClick={async()=>{await onEliminarPago(p.id);}} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}}>✕</button>}
@@ -4379,7 +4397,13 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                     <Fi label="Monto ($)" value={nuevoPagoMonto} onChange={setNuevoPagoMonto} type="number" placeholder="0"/>
                     <Fi label="Fecha del pago" value={nuevoPagoFecha} onChange={setNuevoPagoFecha} type="date"/>
                   </div>
-                  <Fi label="Método de pago" value={nuevoPagoMetodo} onChange={setNuevoPagoMetodo} options={METODOS_PAGO}/>
+                  <Fi label="Método de pago" value={nuevoPagoMetodo} onChange={v=>{setNuevoPagoMetodo(v);if(!METODOS_CON_COMISION_EG.includes(v))setNuevoPagoComision("");}} options={METODOS_PAGO}/>
+                  {METODOS_CON_COMISION_EG.includes(nuevoPagoMetodo)&&(
+                    <div style={{background:"#FF4D6A11",border:"1px solid #FF4D6A33",borderRadius:8,padding:"10px 14px"}}>
+                      <Fi label="Comisión de la plataforma ($)" value={nuevoPagoComision} onChange={setNuevoPagoComision} type="number" placeholder="0"/>
+                      <div style={{fontSize:11,color:G.textoSec,marginTop:4}}>Plata extra que te cobran a vos por pagar por esta vía — no se descuenta de lo que le corresponde al proveedor, sale aparte de tu billetera.</div>
+                    </div>
+                  )}
                   <Fi label="Notas (opcional)" value={nuevoPagoNotas} onChange={setNuevoPagoNotas} placeholder="Ej: primera cuota"/>
                   <Btn full disabled={!nuevoPagoMonto||parseFloat(nuevoPagoMonto)<=0||guardandoPago} onClick={async()=>{
                     setGuardandoPago(true);
@@ -4388,6 +4412,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                       monto:parseFloat(nuevoPagoMonto),
                       metodo_pago:nuevoPagoMetodo,
                       notas:nuevoPagoNotas,
+                      comision_plataforma:parseFloat(nuevoPagoComision)||0,
                     });
                     // Refrescar el egreso local para que el modal muestre el saldo actualizado
                     setModalPagos(prev=>prev?{...prev,
@@ -4396,7 +4421,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                       reembolso_pendiente:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-parseFloat(nuevoPagoMonto))>0,
                       reembolsado:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-parseFloat(nuevoPagoMonto))===0,
                     }:null);
-                    setNuevoPagoMonto("");setNuevoPagoNotas("");setNuevoPagoFecha(hoy());
+                    setNuevoPagoMonto("");setNuevoPagoNotas("");setNuevoPagoFecha(hoy());setNuevoPagoComision("");
                     setGuardandoPago(false);
                   }}>
                     {guardandoPago?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:"✓ Registrar pago"}
@@ -6902,7 +6927,10 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
           });
         });
 
-        // 5. Pagos de egresos (pagos_egreso con fecha real) — excluye Inversión inicial
+        // 5. Pagos de egresos (pagos_egreso con fecha real) — excluye Inversión inicial.
+        // La comisión de plataforma (si la hay) suma al monto que sale de la billetera --
+        // al revés que en ventas, acá hace que salga MÁS plata de la que se le debía al
+        // proveedor, no menos.
         pagosEgreso.forEach(p=>{
           const eg = egresos.find(e=>e.id===p.egreso_id);
           if(eg?.tipo==="Inversión inicial") return; // excluir inversiones
@@ -6910,7 +6938,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
           movs.push({
             id:`pe-${p.id}`, fecha:p.fecha, tipo:"egreso",
             concepto:eg?eg.concepto:"Pago egreso",
-            metodo:p.metodo_pago, monto:p.monto, billetera,
+            metodo:p.metodo_pago, monto:p.monto+(p.comision_plataforma||0), billetera,
             origen:"Gasto/Egreso",
           });
         });
@@ -9198,7 +9226,7 @@ export default function App(){
           {data.loading&&modulo!=="venta"
             ?<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:12}}><Spinner/><span style={{color:G.textoSec}}>Cargando datos...</span></div>
             :(<>
-              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} descuentosEgreso={data.descuentosEgreso} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
+              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} descuentosEgreso={data.descuentosEgreso} pagosEgreso={data.pagosEgreso} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
               {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
               {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} onCrearPresupuesto={data.crearPresupuesto} vendedores={data.vendedores} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
