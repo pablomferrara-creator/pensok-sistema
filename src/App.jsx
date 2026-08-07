@@ -895,25 +895,29 @@ function useData(toast){
   }
 
   // ── ABASTECIMIENTO ────────────────────────────────────────
-  async function registrarAbastecimiento(datos){
+  // Núcleo de un ingreso de abastecimiento (insert + stock + consumo de granel), sin
+  // toast ni cargar() -- así lo puede reusar tanto un ingreso suelto como un lote de
+  // varios productos de una misma compra, sin duplicar la lógica.
+  // `overrides` lleva el stock "en curso" durante un lote (producto_id -> stock), para
+  // que si dos productos del mismo lote consumen el mismo granel, el segundo no pise el
+  // descuento que ya hizo el primero (ambos leerían productos.stock desactualizado si no).
+  async function _procesarUnIngresoAbastecimiento(datos, overrides={}){
     const{error}=await supabase.from("abastecimiento").insert(datos);
     if(error){
       console.error("Error abastecimiento:", error);
-      // 409 = conflicto / unique constraint violation
       if(error.code==="23505"||error.status===409){
-        toast.err("Ya existe un registro con esos datos (conflicto único). Revisá si ya fue cargado.");
+        toast.err(`Ya existe un registro para "${datos.nombre}" con esos datos (conflicto único). Revisá si ya fue cargado.`);
       } else {
-        toast.err("Error al registrar ingreso: "+error.message);
+        toast.err(`Error al registrar "${datos.nombre}": `+error.message);
       }
-      return;
+      return false;
     }
-    // actualizar stock y costo del producto
     const prod=productos.find(p=>p.id===datos.producto_id);
     if(prod){
-      await supabase.from("productos").update({
-        stock:prod.stock+datos.cantidad,
-        costo:datos.costo_unit
-      }).eq("id",prod.id);
+      const stockBase = overrides[prod.id]!==undefined ? overrides[prod.id] : (prod.stock||0);
+      const nuevoStock = stockBase+datos.cantidad;
+      await supabase.from("productos").update({stock:nuevoStock, costo:datos.costo_unit}).eq("id",prod.id);
+      overrides[prod.id]=nuevoStock;
       // Si este producto se envasa desde un producto a granel (ej. bidones de Cloro 10L
       // que salen del vinner "CLORO LIQUIDO x Litro"), descontar del granel lo consumido,
       // y dejarlo como movimiento propio en Abastecimiento para que quede trazable.
@@ -921,7 +925,10 @@ function useData(toast){
         const granel=productos.find(p=>p.id===prod.granel_id);
         if(granel){
           const litrosConsumidos=datos.cantidad*prod.consumo_granel;
-          await supabase.from("productos").update({stock:granel.stock-litrosConsumidos}).eq("id",granel.id);
+          const granelStockBase = overrides[granel.id]!==undefined ? overrides[granel.id] : (granel.stock||0);
+          const nuevoGranelStock = granelStockBase-litrosConsumidos;
+          await supabase.from("productos").update({stock:nuevoGranelStock}).eq("id",granel.id);
+          overrides[granel.id]=nuevoGranelStock;
           await supabase.from("abastecimiento").insert({
             fecha:datos.fecha||hoy(), producto_id:granel.id, nombre:granel.nombre,
             cantidad:-litrosConsumidos, costo_unit:granel.costo||0,
@@ -932,7 +939,26 @@ function useData(toast){
         }
       }
     }
-    toast.ok("Ingreso de mercaderia registrado");
+    return true;
+  }
+
+  async function registrarAbastecimiento(datos){
+    const ok = await _procesarUnIngresoAbastecimiento(datos);
+    if(ok){ toast.ok("Ingreso de mercaderia registrado"); await cargar(); }
+  }
+
+  // Registra varios productos de una misma compra de una sola vez (mismo proveedor/fecha/
+  // responsable/compra vinculada), en vez de tener que repetir el formulario producto por
+  // producto. `items` ya viene como filas completas, mismo formato que espera un ingreso suelto.
+  async function registrarAbastecimientoLote(items){
+    if(!items||!items.length) return;
+    const overrides={};
+    let okCount=0;
+    for(const datos of items){
+      const ok = await _procesarUnIngresoAbastecimiento(datos,overrides);
+      if(ok) okCount++;
+    }
+    if(okCount>0) toast.ok(`${okCount} de ${items.length} producto${items.length!==1?"s":""} registrado${okCount!==1?"s":""}`);
     await cargar();
   }
 
@@ -1727,7 +1753,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
 }
 
 // ============================================================
@@ -6201,10 +6227,10 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
     )}
   </>);
 }
-function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,vendedores,proveedores,onEditar,onEliminar}){
+function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,onRegistrarLote,vendedores,proveedores,onEditar,onEliminar}){
   const [vista,setV]=useState("historial");
-  const [prodBusq,setPB]=useState(""); const [prodSelec,setPS]=useState(null);
-  const [cantidad,setCant]=useState(""); const [costoUnit,setCU]=useState("");
+  const [prodBusq,setPB]=useState("");
+  const [items,setItems]=useState([]); // {productoId,nombre,cantidad,costoUnit}
   const [proveedor,setProv]=useState(""); const [metodo,setMet]=useState(METODOS_PAGO[0]);
   const [resp,setResp]=useState(""); const [notas,setNotas]=useState("");
   const [loading,setLoading]=useState(false); const [ok,setOk]=useState(false);
@@ -6241,10 +6267,20 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,v
   }
 
   const prodFilt=useMemo(()=>{if(!prodBusq)return[];const q=prodBusq.toLowerCase();return productos.filter(p=>p.activo&&(p.nombre.toLowerCase().includes(q)||p.codigo.toLowerCase().includes(q)));},[prodBusq,productos]);
-  const total=(parseFloat(cantidad)||0)*(parseFloat(costoUnit)||0);
   const [fechaAbast, setFechaAbast]=useState(hoy());
   const [egresoLink, setEgresoLink]=useState("");
-  const valido=prodSelec&&cantidad;
+  const valido=items.length>0;
+  const totalLote=items.reduce((s,i)=>s+i.cantidad*i.costoUnit,0);
+
+  function agregarItem(p){
+    setItems(prev=>{
+      const ex=prev.find(i=>i.productoId===p.id);
+      if(ex) return prev.map(i=>i.productoId===p.id?{...i,cantidad:i.cantidad+1}:i);
+      return [...prev,{productoId:p.id,nombre:p.nombre,cantidad:1,costoUnit:p.costo||0}];
+    });
+    if(!proveedor) setProv(p.proveedor||"");
+    setPB("");
+  }
 
   // Compras de productos pendientes de cargar, para el desplegable "a qué compra corresponde".
   // Prioriza las del mismo proveedor elegido, pero muestra todas las recientes por si acaso.
@@ -6259,12 +6295,18 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,v
 
   async function registrar(){
     if(!valido)return;setLoading(true);
-    await onRegistrar({fecha:fechaAbast||hoy(),producto_id:prodSelec.id,nombre:prodSelec.nombre,cantidad:parseInt(cantidad),costo_unit:parseFloat(costoUnit)||prodSelec.costo||0,proveedor,metodo_pago:metodo||METODOS_PAGO[0],responsable:resp||"Pensok",notas,egreso_id:egresoLink?parseInt(egresoLink):null});
+    const filas = items.map(i=>({
+      fecha:fechaAbast||hoy(), producto_id:i.productoId, nombre:i.nombre,
+      cantidad:i.cantidad, costo_unit:i.costoUnit,
+      proveedor, metodo_pago:metodo||METODOS_PAGO[0], responsable:resp||"Pensok",
+      notas, egreso_id:egresoLink?parseInt(egresoLink):null,
+    }));
+    await onRegistrarLote(filas);
     setLoading(false);setOk(true);
-    setTimeout(()=>{setPS(null);setPB("");setCant("");setNotas("");setOk(false);setV("historial");setFechaAbast(hoy());setEgresoLink("");},2000);
+    setTimeout(()=>{setItems([]);setPB("");setNotas("");setOk(false);setV("historial");setFechaAbast(hoy());setEgresoLink("");},2000);
   }
 
-  if(ok)return(<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:14}}><div style={{fontSize:44,color:G.verde}}>✓</div><div style={{fontSize:20,fontWeight:600,color:G.verde}}>Ingreso registrado</div></div>);
+  if(ok)return(<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:14}}><div style={{fontSize:44,color:G.verde}}>✓</div><div style={{fontSize:20,fontWeight:600,color:G.verde}}>{items.length>1?`${items.length} productos registrados`:"Ingreso registrado"}</div></div>);
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -6278,14 +6320,14 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,v
       {vista==="nuevo"&&(
         <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16,alignItems:"start"}}>
           <Card>
-            <ST>Producto</ST>
+            <ST>Productos</ST>
             <div style={{position:"relative"}}>
-              <input value={prodSelec?prodSelec.nombre:prodBusq} onChange={e=>{setPS(null);setPB(e.target.value);}} placeholder="Buscar producto..."
+              <input value={prodBusq} onChange={e=>setPB(e.target.value)} placeholder="Buscar producto para agregar..."
                 style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"9px 12px",color:G.texto,fontSize:13,width:"100%",outline:"none"}}/>
-              {!prodSelec&&prodFilt.length>0&&(
+              {prodFilt.length>0&&(
                 <div style={{position:"absolute",top:"100%",left:0,right:0,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,marginTop:4,zIndex:10,maxHeight:200,overflowY:"auto"}}>
                   {prodFilt.map(p=>(
-                    <div key={p.id} onClick={()=>{setPS(p);setPB("");setProv(p.proveedor||"");}} style={{padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${G.borde}22`}} onMouseEnter={e=>e.currentTarget.style.background=G.borde} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div key={p.id} onClick={()=>agregarItem(p)} style={{padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${G.borde}22`}} onMouseEnter={e=>e.currentTarget.style.background=G.borde} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       <div style={{fontSize:13,fontWeight:500}}>{p.nombre}</div>
                       <div style={{fontSize:11,color:G.textoSec}}>Stock: {p.stock} · Ultimo costo: {p.moneda==="USD"?fmtUSD(p.costo):fmt(p.costo)}</div>
                     </div>
@@ -6293,10 +6335,28 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,v
                 </div>
               )}
             </div>
-            {prodSelec&&<div style={{marginTop:10,background:G.sup2,borderRadius:8,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:500,fontSize:13}}>{prodSelec.nombre}</div><div style={{fontSize:11,color:G.textoSec,marginTop:2}}>Stock actual: <strong style={{color:estadoStock(prodSelec)==="agotado"?G.rojo:estadoStock(prodSelec)==="bajo"?G.amarillo:G.texto}}>{prodSelec.stock}</strong></div></div><Btn small variant="ghost" onClick={()=>{setPS(null);setPB("");}}>✕</Btn></div>}
+            {items.length>0&&(
+              <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
+                {items.map(it=>{
+                  const prod = productos.find(p=>p.id===it.productoId);
+                  return(
+                    <div key={it.productoId} style={{display:"flex",alignItems:"center",gap:8,background:G.sup2,borderRadius:8,padding:"8px 10px"}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</div>
+                        {prod&&<div style={{fontSize:11,color:G.textoSec}}>Stock actual: {prod.stock} → {prod.stock+it.cantidad}</div>}
+                      </div>
+                      <input type="number" value={it.cantidad} min="1" onChange={e=>{const n=parseInt(e.target.value)||1;setItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,cantidad:Math.max(1,n)}:i));}}
+                        style={{width:56,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"6px 8px",color:G.texto,fontSize:12,textAlign:"center"}}/>
+                      <input type="number" value={it.costoUnit} onChange={e=>setItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,costoUnit:parseFloat(e.target.value)||0}:i))}
+                        style={{width:90,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"6px 8px",color:G.texto,fontSize:12,textAlign:"right"}} title="Costo unitario"/>
+                      <Btn small variant="danger" onClick={()=>setItems(prev=>prev.filter(i=>i.productoId!==it.productoId))}>✕</Btn>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <Div/>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <Fi label="Cantidad"    value={cantidad}  onChange={setCant} type="number" min="1" placeholder="0"/>
               <Fi label="Proveedor"   value={proveedor} onChange={setProv} options={(proveedores||[]).filter(p=>p.activo).map(p=>p.nombre)}/>
               <Fi label="Responsable" value={resp}      onChange={setResp} options={(vendedores||[]).map(v=>v.nombre)}/>
               <Fi label="Fecha del ingreso" value={fechaAbast} onChange={setFechaAbast} type="date"/>
@@ -6310,12 +6370,12 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,v
           <Card>
             <ST>Resumen</ST>
             <div style={{display:"flex",flexDirection:"column",gap:9,fontSize:13}}>
-              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Producto</span><span style={{fontWeight:500,textAlign:"right",maxWidth:140,wordBreak:"break-word"}}>{prodSelec?.nombre||"—"}</span></div>
-              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Cantidad</span><span style={{fontFamily:"'DM Mono',monospace"}}>{cantidad||0} u.</span></div>
-              {prodSelec&&cantidad&&<><div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Nuevo stock</span><span style={{color:G.verde,fontFamily:"'DM Mono',monospace"}}>{prodSelec.stock+parseInt(cantidad||0)} u.</span></div></>}
+              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Productos</span><span style={{fontFamily:"'DM Mono',monospace"}}>{items.length}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Unidades</span><span style={{fontFamily:"'DM Mono',monospace"}}>{items.reduce((s,i)=>s+i.cantidad,0)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Total</span><span style={{color:G.verde,fontFamily:"'DM Mono',monospace",fontWeight:600}}>{fmt(totalLote)}</span></div>
             </div>
             <Btn full disabled={!valido||loading} onClick={registrar} style={{marginTop:16,padding:"11px 0",fontSize:14}}>
-              {loading?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:"Registrar ingreso →"}
+              {loading?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:`Registrar ${items.length>1?`${items.length} productos`:"ingreso"} →`}
             </Btn>
           </Card>
         </div>
@@ -9147,7 +9207,7 @@ export default function App(){
               {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
-              {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
+              {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
               {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} descuentosEgreso={data.descuentosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
