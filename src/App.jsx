@@ -581,6 +581,31 @@ function useData(toast){
     await cargar();
   }
 
+  // Edita los items de un presupuesto TODAVÍA PENDIENTE (el cliente pidió agregar/sacar
+  // algo antes de cerrar la venta) -- mismo número de presupuesto, pero suma versión y
+  // refresca la fecha (así un presupuesto vencido vuelve a quedar vigente al editarlo).
+  async function editarPresupuestoItems(presupuestoId,items,editadoPor){
+    if(!items||!items.length){ toast.err("El presupuesto necesita al menos un producto"); return; }
+    const pres = presupuestos.find(p=>p.id===presupuestoId);
+    if(!pres) return;
+    const total = calcTotalItems(items,pres.descuento||0);
+    const ganancia = calcGananciaItems(items,pres.descuento||0);
+    const{error:pErr}=await supabase.from("presupuestos").update({
+      total, ganancia_estimada:ganancia, fecha:hoy(),
+      version:(pres.version||1)+1, editado_por:editadoPor, editado_en:new Date().toISOString()
+    }).eq("id",presupuestoId);
+    if(pErr){ console.error("Error editando presupuesto:",pErr); toast.err("Error al actualizar el presupuesto"); return; }
+    await supabase.from("presupuesto_items").delete().eq("presupuesto_id",presupuestoId);
+    const filas = items.map(i=>({
+      presupuesto_id:presupuestoId, producto_id:i.productoId||null, nombre:i.nombre,
+      cantidad:i.cantidad, precio:i.precio, costo:i.costo||0
+    }));
+    const{error:iErr}=await supabase.from("presupuesto_items").insert(filas);
+    if(iErr){ console.error("Error guardando items del presupuesto:",iErr); toast.err("Se actualizó el presupuesto pero no se pudieron guardar los items"); }
+    toast.ok("Presupuesto actualizado");
+    await cargar();
+  }
+
   // ── DEVOLUCIONES (NOTAS DE CRÉDITO) ─────────────────────
   // dev = { ventaId, ventaNro, clienteNombre, clienteId, tipo:'dinero'|'saldo',
   //         metodoDevolucion, motivo, vendedor,
@@ -1666,7 +1691,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems};
 }
 
 // ============================================================
@@ -2332,97 +2357,9 @@ function ModuloValorStock({historial=[]}){
 // ============================================================
 // MODULO: NUEVA VENTA
 // ============================================================
-function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedores,esAdmin=true,toast}){
-  const METODOS_VENTA = ["Efectivo","Transferencia MP","Transferencia Banco","Debito MP","Debito Banco","Credito MP","Credito Banco","Credito Cuotas Banco"];
-  const DESC_POR_METODO = {
-    "Efectivo":10,
-    "Transferencia MP":5,"Transferencia Banco":5,
-    "Debito MP":0,"Debito Banco":0,
-    "Credito MP":0,"Credito Banco":0,"Credito Cuotas Banco":0,
-  };
-
-  const nombresVend=(vendedores||[]).map(v=>v.nombre);
-  const [vendedor,  setVendedor]  = useState(nombresVend[0]||"");
-  const [metodo,    setMetodo]    = useState("Debito MP");
-  const [modalidad, setModalidad] = useState(MODALIDADES[0]);
-  const [descuento, setDescuento] = useState("0");
-  const [items,     setItems]     = useState([]);
-  const [busqueda,  setBusqueda]  = useState("");
-  const [cobrado,   setCobrado]   = useState(true);
-  const [entregado, setEntregado] = useState(true);
-  const [loading,   setLoading]   = useState(false);
-  const [genPres,   setGenPres]   = useState(false);
-  const [ok,        setOk]        = useState(false);
-
-  // Metodo de pago cambia el descuento automaticamente
-  function cambiarMetodo(nuevoMetodo){
-    setMetodo(nuevoMetodo);
-    if(modalidad==="Telefonica / Delivery"){
-      setDescuento("0");
-    } else if(tipoCliente==="mayorista"||tipoCliente==="costo"){
-      setDescuento("0");
-    } else {
-      setDescuento(String(DESC_POR_METODO[nuevoMetodo]??0));
-    }
-  }
-
-  function cambiarModalidad(nuevaModalidad){
-    setModalidad(nuevaModalidad);
-    if(nuevaModalidad==="Telefonica / Delivery"){
-      setDescuento("0");
-    } else if(tipoCliente==="mayorista"||tipoCliente==="costo"){
-      setDescuento("0");
-    } else {
-      setDescuento(String(DESC_POR_METODO[metodo]??0));
-    }
-  }
-
-  // Cliente siempre Consumidor Final por default (no hay clienteId)
-  const [clienteId, setClienteId] = useState("");
-  const cliente     = clientes.find(c=>String(c.id)===String(clienteId));
-  const tipoCliente = cliente?.tipo||"minorista";
-
-  // Cuando cambia el cliente, recalcular descuento
-  function cambiarCliente(nuevoId){
-    setClienteId(nuevoId);
-    const cli = clientes.find(c=>String(c.id)===String(nuevoId));
-    const tipo = cli?.tipo||"minorista";
-    if(tipo==="mayorista"||tipo==="costo"||modalidad==="Telefonica / Delivery"){
-      setDescuento("0");
-    } else {
-      setDescuento(String(DESC_POR_METODO[metodo]??0));
-    }
-  }
-
-  const prodFiltrados=useMemo(()=>{
-    if(!busqueda)return productos.filter(p=>p.activo);
-    const q=busqueda.toLowerCase();
-    return productos.filter(p=>p.activo&&(p.nombre.toLowerCase().includes(q)||p.codigo.toLowerCase().includes(q)||p.categoria.toLowerCase().includes(q)));
-  },[busqueda,productos]);
-
-  // No auto-seleccionar cliente: default es Consumidor Final (sin clienteId)
-
-  function agregarItem(prod){
-    setItems(prev=>{
-      const ex=prev.find(i=>i.productoId===prod.id);
-      if(ex)return prev.map(i=>i.productoId===prod.id?{...i,cantidad:i.cantidad+1}:i);
-      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:precioARS(getPrecio(prod,tipoCliente),prod.moneda),costo:precioARS(prod.costo,prod.moneda)}];
-    });
-    setBusqueda("");
-  }
-
-  const total    = calcTotalItems(items,parseFloat(descuento)||0);
-  const ganancia = calcGananciaItems(items,parseFloat(descuento)||0);
-
-
-  async function generarPresupuesto(){
-    if(items.length===0)return;
-    setGenPres(true);
-    const nroPresupuesto = await onCrearPresupuesto({
-      clienteId:clienteId||null, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL",
-      vendedor, tipoLista:tipoCliente, modalidad, descuento:parseFloat(descuento)||0, items
-    });
-    if(!nroPresupuesto) toast.err("El presupuesto se generó pero no se pudo guardar en el sistema");
+// PDF de presupuesto, compartido entre "Nueva Venta" (al generarlo por primera vez) y
+// "Presupuestos" (al reimprimir uno ya editado, mostrando su version si es >1).
+async function generarPDFPresupuesto({nroPresupuesto,version=1,clienteNombre="CONSUMIDOR FINAL",vendedor,tipoCliente="minorista",items}){
     if(!window.jspdf){
       await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s);});
     }
@@ -2438,7 +2375,6 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
     const validezDate = new Date(ahora.getTime()+15*24*60*60*1000);
     const validezStr = validezDate.toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'});
     const tipoListaLabel = tipoCliente.charAt(0).toUpperCase()+tipoCliente.slice(1);
-    const clienteNombre = cliente?.nombre||"CONSUMIDOR FINAL";
 
     // Header azul
     doc.setFillColor(...azul);
@@ -2461,7 +2397,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
     doc.setTextColor(...blanco);
     doc.text('PRESUPUESTO',W-32,15,{align:'center'});
     doc.setFontSize(8);
-    doc.text(nroPresupuesto||'',W-32,21,{align:'center'});
+    doc.text((nroPresupuesto||'')+(version>1?` (v${version})`:''),W-32,21,{align:'center'});
     doc.setFont('helvetica','normal');
     doc.text(fechaStr+' '+horaStr+'hs',W-32,27,{align:'center'});
 
@@ -2585,6 +2521,100 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
 
     const fname = 'Presupuesto Pensok - '+clienteNombre+' - '+fechaStr.replace(/\//g,'-')+'.pdf';
     doc.save(fname);
+}
+
+function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedores,esAdmin=true,toast}){
+  const METODOS_VENTA = ["Efectivo","Transferencia MP","Transferencia Banco","Debito MP","Debito Banco","Credito MP","Credito Banco","Credito Cuotas Banco"];
+  const DESC_POR_METODO = {
+    "Efectivo":10,
+    "Transferencia MP":5,"Transferencia Banco":5,
+    "Debito MP":0,"Debito Banco":0,
+    "Credito MP":0,"Credito Banco":0,"Credito Cuotas Banco":0,
+  };
+
+  const nombresVend=(vendedores||[]).map(v=>v.nombre);
+  const [vendedor,  setVendedor]  = useState(nombresVend[0]||"");
+  const [metodo,    setMetodo]    = useState("Debito MP");
+  const [modalidad, setModalidad] = useState(MODALIDADES[0]);
+  const [descuento, setDescuento] = useState("0");
+  const [items,     setItems]     = useState([]);
+  const [busqueda,  setBusqueda]  = useState("");
+  const [cobrado,   setCobrado]   = useState(true);
+  const [entregado, setEntregado] = useState(true);
+  const [loading,   setLoading]   = useState(false);
+  const [genPres,   setGenPres]   = useState(false);
+  const [ok,        setOk]        = useState(false);
+
+  // Metodo de pago cambia el descuento automaticamente
+  function cambiarMetodo(nuevoMetodo){
+    setMetodo(nuevoMetodo);
+    if(modalidad==="Telefonica / Delivery"){
+      setDescuento("0");
+    } else if(tipoCliente==="mayorista"||tipoCliente==="costo"){
+      setDescuento("0");
+    } else {
+      setDescuento(String(DESC_POR_METODO[nuevoMetodo]??0));
+    }
+  }
+
+  function cambiarModalidad(nuevaModalidad){
+    setModalidad(nuevaModalidad);
+    if(nuevaModalidad==="Telefonica / Delivery"){
+      setDescuento("0");
+    } else if(tipoCliente==="mayorista"||tipoCliente==="costo"){
+      setDescuento("0");
+    } else {
+      setDescuento(String(DESC_POR_METODO[metodo]??0));
+    }
+  }
+
+  // Cliente siempre Consumidor Final por default (no hay clienteId)
+  const [clienteId, setClienteId] = useState("");
+  const cliente     = clientes.find(c=>String(c.id)===String(clienteId));
+  const tipoCliente = cliente?.tipo||"minorista";
+
+  // Cuando cambia el cliente, recalcular descuento
+  function cambiarCliente(nuevoId){
+    setClienteId(nuevoId);
+    const cli = clientes.find(c=>String(c.id)===String(nuevoId));
+    const tipo = cli?.tipo||"minorista";
+    if(tipo==="mayorista"||tipo==="costo"||modalidad==="Telefonica / Delivery"){
+      setDescuento("0");
+    } else {
+      setDescuento(String(DESC_POR_METODO[metodo]??0));
+    }
+  }
+
+  const prodFiltrados=useMemo(()=>{
+    if(!busqueda)return productos.filter(p=>p.activo);
+    const q=busqueda.toLowerCase();
+    return productos.filter(p=>p.activo&&(p.nombre.toLowerCase().includes(q)||p.codigo.toLowerCase().includes(q)||p.categoria.toLowerCase().includes(q)));
+  },[busqueda,productos]);
+
+  // No auto-seleccionar cliente: default es Consumidor Final (sin clienteId)
+
+  function agregarItem(prod){
+    setItems(prev=>{
+      const ex=prev.find(i=>i.productoId===prod.id);
+      if(ex)return prev.map(i=>i.productoId===prod.id?{...i,cantidad:i.cantidad+1}:i);
+      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:precioARS(getPrecio(prod,tipoCliente),prod.moneda),costo:precioARS(prod.costo,prod.moneda)}];
+    });
+    setBusqueda("");
+  }
+
+  const total    = calcTotalItems(items,parseFloat(descuento)||0);
+  const ganancia = calcGananciaItems(items,parseFloat(descuento)||0);
+
+
+  async function generarPresupuesto(){
+    if(items.length===0)return;
+    setGenPres(true);
+    const nroPresupuesto = await onCrearPresupuesto({
+      clienteId:clienteId||null, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL",
+      vendedor, tipoLista:tipoCliente, modalidad, descuento:parseFloat(descuento)||0, items
+    });
+    if(!nroPresupuesto) toast.err("El presupuesto se generó pero no se pudo guardar en el sistema");
+    await generarPDFPresupuesto({nroPresupuesto, version:1, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL", vendedor, tipoCliente, items});
     setGenPres(false);
   }
 
@@ -2852,7 +2882,7 @@ function presupuestoVencido(p){
   return p.estado==="pendiente" && venceElPresupuesto(p.fecha) < hoy();
 }
 
-function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],vendedoresOtro=[],usuarioEmail="",esAdmin=true}){
+function ModuloPresupuestos({presupuestos=[],productos=[],onAprobar,onCancelar,onEditarItems,vendedores=[],vendedoresOtro=[],usuarioEmail="",esAdmin=true}){
   const miNombre = useMemo(()=>{
     const email=(usuarioEmail||"").trim().toLowerCase();
     if(!email) return "";
@@ -2864,12 +2894,15 @@ function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],
 
   const [filtro,setFiltro]     = useState("activos"); // activos|pendiente|vencido|aprobado|cancelado
   const [verPres,setVerPres]   = useState(null);
-  const [accion,setAccion]     = useState(null); // null|"aprobar"|"cancelar"
+  const [accion,setAccion]     = useState(null); // null|"aprobar"|"cancelar"|"editar"
   const [metodoPago,setMetodoPago] = useState(METODOS_VENTA_APROBAR[0]);
   const [cobrado,setCobrado]   = useState(true);
   const [entregado,setEntregado] = useState(true);
   const [motivo,setMotivo]     = useState("");
   const [procesando,setProcesando] = useState(false);
+  const [editItems,setEditItems]   = useState([]); // {productoId,nombre,cantidad,precio,costo}
+  const [busquedaProd,setBusquedaProd] = useState("");
+  const [descargando,setDescargando]   = useState(false);
 
   const conteos = useMemo(()=>({
     pendiente: presupuestos.filter(p=>p.estado==="pendiente"&&!presupuestoVencido(p)).length,
@@ -2888,7 +2921,7 @@ function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],
     return [...lista].sort((a,b)=>new Date(b.creado_en)-new Date(a.creado_en));
   },[presupuestos,filtro]);
 
-  function abrir(p){ setVerPres(p); setAccion(null); setMetodoPago(METODOS_VENTA_APROBAR[0]); setCobrado(true); setEntregado(true); setMotivo(""); }
+  function abrir(p){ setVerPres(p); setAccion(null); setMetodoPago(METODOS_VENTA_APROBAR[0]); setCobrado(true); setEntregado(true); setMotivo(""); setBusquedaProd(""); }
   function cerrar(){ setVerPres(null); setAccion(null); }
 
   async function confirmarAprobar(){
@@ -2902,6 +2935,37 @@ function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],
     await onCancelar(verPres.id,motivo,responsableActual);
     setProcesando(false);
     cerrar();
+  }
+
+  function abrirEditarItems(){
+    setEditItems((verPres.presupuesto_items||[]).map(it=>({
+      productoId:it.producto_id, nombre:it.nombre, cantidad:it.cantidad, precio:it.precio, costo:it.costo||0
+    })));
+    setBusquedaProd("");
+    setAccion("editar");
+  }
+  function agregarItemEdit(prod){
+    setEditItems(prev=>{
+      const ex=prev.find(i=>i.productoId===prod.id);
+      if(ex) return prev.map(i=>i.productoId===prod.id?{...i,cantidad:i.cantidad+1}:i);
+      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:prod.precio_min||0,costo:prod.costo||0}];
+    });
+    setBusquedaProd("");
+  }
+  async function confirmarEditar(){
+    setProcesando(true);
+    await onEditarItems(verPres.id,editItems,responsableActual);
+    setProcesando(false);
+    cerrar();
+  }
+  async function descargarPDFActualizado(p){
+    setDescargando(true);
+    const items=(p.presupuesto_items||[]).map(it=>({nombre:it.nombre,cantidad:it.cantidad,precio:it.precio}));
+    await generarPDFPresupuesto({
+      nroPresupuesto:p.nro_presupuesto, version:p.version||1, clienteNombre:p.cliente_nombre,
+      vendedor:p.vendedor, tipoCliente:p.tipo_lista, items
+    });
+    setDescargando(false);
   }
 
   const FILTROS = [
@@ -2935,7 +2999,7 @@ function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],
             <Card key={p.id} style={{padding:"12px 18px",cursor:"pointer"}} onClick={()=>abrir(p)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                 <div>
-                  <div style={{fontWeight:600,fontSize:14}}>{p.nro_presupuesto} — {p.cliente_nombre||"Consumidor Final"}</div>
+                  <div style={{fontWeight:600,fontSize:14}}>{p.nro_presupuesto}{p.version>1?` · v${p.version}`:""} — {p.cliente_nombre||"Consumidor Final"}</div>
                   <div style={{fontSize:12,color:G.textoSec,marginTop:2}}>{p.fecha} · {p.vendedor} · {items.length} items · {fmt(p.total)}</div>
                 </div>
                 {p.estado==="cancelado"&&<Badge color="rojo">Cancelado</Badge>}
@@ -2953,14 +3017,17 @@ function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],
         const vencido = presupuestoVencido(verPres);
         const items = verPres.presupuesto_items||[];
         return(
-          <Modal title={`${verPres.nro_presupuesto} — ${verPres.fecha}`} onClose={cerrar} maxWidth={620}
+          <Modal title={`${verPres.nro_presupuesto}${verPres.version>1?` · v${verPres.version}`:""} — ${verPres.fecha}`} onClose={cerrar} maxWidth={620}
             footer={accion?(<>
               <Btn variant="secondary" onClick={()=>setAccion(null)} disabled={procesando}>Volver</Btn>
               {accion==="aprobar"&&<Btn variant="primary" disabled={procesando} onClick={confirmarAprobar}>{procesando?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Aprobando...</span>:"Confirmar y crear venta"}</Btn>}
               {accion==="cancelar"&&<Btn variant="danger" disabled={procesando||!motivo.trim()} onClick={confirmarCancelar}>{procesando?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Cancelando...</span>:"Confirmar cancelación"}</Btn>}
+              {accion==="editar"&&<Btn variant="primary" disabled={procesando||editItems.length===0} onClick={confirmarEditar}>{procesando?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Guardando...</span>:"Guardar cambios"}</Btn>}
             </>):(<>
               <Btn variant="secondary" onClick={cerrar}>Cerrar</Btn>
+              <Btn variant="secondary" disabled={descargando} onClick={()=>descargarPDFActualizado(verPres)}>{descargando?"Generando...":"🖨 Descargar PDF"}</Btn>
               {verPres.estado==="pendiente"&&<Btn variant="danger" onClick={()=>setAccion("cancelar")}>Cancelar presupuesto</Btn>}
+              {verPres.estado==="pendiente"&&<Btn variant="secondary" onClick={abrirEditarItems}>✏️ Editar ítems</Btn>}
               {verPres.estado==="pendiente"&&!vencido&&<Btn variant="primary" onClick={()=>setAccion("aprobar")}>Aprobar → crear venta</Btn>}
             </>)}>
             <div style={{fontSize:12,color:G.textoSec,marginBottom:10}}>
@@ -3017,6 +3084,44 @@ function ModuloPresupuestos({presupuestos=[],onAprobar,onCancelar,vendedores=[],
                   style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"8px 10px",color:G.texto,fontSize:13,outline:"none",resize:"vertical"}}/>
               </div>
             )}
+
+            {accion==="editar"&&(()=>{
+              const hits = busquedaProd.length>1 ? productos.filter(pr=>pr.activo&&pr.nombre.toLowerCase().includes(busquedaProd.toLowerCase())).slice(0,8) : [];
+              return(
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{fontSize:12,color:G.textoSec}}>Agregá, sacá o cambiá cantidades. Al guardar queda como una nueva versión de este mismo presupuesto (v{(verPres.version||1)+1}), con la fecha actualizada.</div>
+                  <div style={{position:"relative"}}>
+                    <input value={busquedaProd} onChange={e=>setBusquedaProd(e.target.value)} placeholder="+ Buscar producto para agregar..."
+                      style={{background:G.sup2,border:`1px solid ${G.verde}55`,borderRadius:8,padding:"8px 12px",color:G.texto,fontSize:13,outline:"none",width:"100%"}}/>
+                    {hits.length>0&&(
+                      <div style={{position:"absolute",top:"100%",left:0,right:0,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,marginTop:4,zIndex:10,maxHeight:200,overflowY:"auto"}}>
+                        {hits.map(pr=>(
+                          <div key={pr.id} onClick={()=>agregarItemEdit(pr)} style={{padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${G.borde}22`,display:"flex",justifyContent:"space-between",fontSize:12}}>
+                            <span>{pr.nombre}</span><span style={{color:G.textoSec}}>Stock: {pr.stock}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto"}}>
+                    {editItems.map(it=>(
+                      <div key={it.productoId} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",background:G.sup2,borderRadius:8}}>
+                        <div style={{flex:1,minWidth:0,fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</div>
+                        <input type="number" value={it.cantidad} min="1" onChange={e=>{const n=parseInt(e.target.value)||1;setEditItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,cantidad:Math.max(1,n)}:i));}}
+                          style={{width:52,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 6px",color:G.texto,fontSize:12,textAlign:"center"}}/>
+                        <input type="number" value={it.precio} onChange={e=>setEditItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,precio:parseFloat(e.target.value)||0}:i))}
+                          style={{width:88,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 6px",color:G.texto,fontSize:12,textAlign:"right"}}/>
+                        <Btn small variant="danger" onClick={()=>setEditItems(prev=>prev.filter(i=>i.productoId!==it.productoId))}>✕</Btn>
+                      </div>
+                    ))}
+                    {editItems.length===0&&<div style={{textAlign:"center",padding:"16px 0",color:G.textoSec,fontSize:12}}>Sin productos — agregá al menos uno</div>}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"10px 8px",borderTop:`1px solid ${G.borde}`,fontSize:14,fontWeight:600}}>
+                    <span>Nuevo total</span><span>{fmt(calcTotalItems(editItems,verPres.descuento||0))}</span>
+                  </div>
+                </div>
+              );
+            })()}
           </Modal>
         );
       })()}
@@ -8921,7 +9026,7 @@ export default function App(){
               {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
               {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
               {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} onCrearPresupuesto={data.crearPresupuesto} vendedores={data.vendedores} esAdmin={esAdmin} toast={toast}/>}
-              {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
+              {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
               {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
