@@ -4330,7 +4330,6 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <Fi label="Tipo" value={efTipo} onChange={setEFTipo} options={TIPOS_EGRESO}/>
               <Fi label="Monto total ($)" value={efMonto} onChange={setEFM} type="number"/>
-              <Fi label="Metodo pago" value={efMetodo} onChange={setEFMet} options={METODOS_PAGO}/>
               <Fi label="Quien pago" value={efPagador} onChange={setEFPag} options={["Pensok",...(vendedores||[]).map(v=>v.nombre)]}/>
               <Fi label="Ya reembolsado ($)" value={efReembolsado} onChange={setEFReemb} type="number" placeholder="0"/>
             </div>
