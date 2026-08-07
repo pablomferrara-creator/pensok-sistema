@@ -4331,8 +4331,12 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
               <Fi label="Tipo" value={efTipo} onChange={setEFTipo} options={TIPOS_EGRESO}/>
               <Fi label="Monto total ($)" value={efMonto} onChange={setEFM} type="number"/>
               <Fi label="Quien pago" value={efPagador} onChange={setEFPag} options={["Pensok",...(vendedores||[]).map(v=>v.nombre)]}/>
-              <Fi label="Ya reembolsado ($)" value={efReembolsado} onChange={setEFReemb} type="number" placeholder="0"/>
+              <div>
+                <div style={{fontSize:11,color:G.textoSec,fontWeight:500,textTransform:"uppercase",letterSpacing:0.5,marginBottom:5}}>Ya reembolsado</div>
+                <div style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"8px 11px",fontSize:13,color:G.textoSec}}>{fmt(parseFloat(efReembolsado)||0)}</div>
+              </div>
             </div>
+            <div style={{fontSize:11,color:G.textoSec,marginTop:-6}}>Para registrar o corregir un pago, hacelo desde "Registrar pago" en el detalle del egreso — así queda con fecha y método reales.</div>
             {parseFloat(efReembolsado)>0&&parseFloat(efReembolsado)<parseFloat(efMonto)&&(
               <div style={{background:"#FFB80011",border:"1px solid #FFB80033",borderRadius:8,padding:"8px 12px",fontSize:12,color:G.amarillo}}>
                 Saldo pendiente: <strong>{fmt(parseFloat(efMonto)-parseFloat(efReembolsado))}</strong>
