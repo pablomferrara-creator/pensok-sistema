@@ -469,6 +469,7 @@ function useData(toast){
     if(items.length>0){
       const itemsData = items.map(i=>({
         venta_id:vData.id,
+        producto_id:i.productoId||null,
         nombre:i.nombre,
         cantidad:i.cantidad,
         precio:i.precio,
@@ -642,10 +643,19 @@ function useData(toast){
     }).select().single();
     if(dErr){console.error("Error devolución:",dErr);toast.err("Error al registrar la devolución");return false;}
 
+    // Resolver el producto real UNA vez (por id si vino, si no por nombre) para poder
+    // guardar el vínculo en devolucion_items y reusarlo al reingresar stock -- antes se
+    // resolvía solo al reingresar stock y nunca quedaba guardado en la tabla.
+    const itemsResueltos = dev.items.map(i=>({
+      ...i,
+      prodResuelto: (i.productoId && productos.find(p=>p.id===i.productoId)) || productos.find(p=>p.nombre===i.nombre),
+    }));
+
     // 2. Insertar los ítems devueltos
-    if(dev.items.length>0){
-      await supabase.from("devolucion_items").insert(dev.items.map(i=>({
+    if(itemsResueltos.length>0){
+      await supabase.from("devolucion_items").insert(itemsResueltos.map(i=>({
         devolucion_id: dData.id,
+        producto_id: i.prodResuelto?.id||null,
         nombre: i.nombre,
         cantidad: Number(i.cantidad)||0,
         precio: Number(i.precio)||0,
@@ -655,9 +665,9 @@ function useData(toast){
     }
 
     // 3. Reingresar stock (espejo de registrarVenta) — solo los ítems marcados
-    for(const i of dev.items){
+    for(const i of itemsResueltos){
       if(!i.reingresaStock) continue;
-      const prod = (i.productoId && productos.find(p=>p.id===i.productoId)) || productos.find(p=>p.nombre===i.nombre);
+      const prod = i.prodResuelto;
       if(prod){
         await supabase.from("productos").update({
           stock:(prod.stock||0)+(Number(i.cantidad)||0),
@@ -1583,6 +1593,7 @@ function useData(toast){
     if(items.length>0){
       const itemsData = items.map(i=>({
         venta_id: vData.id,
+        producto_id: i.productoId||null,
         nombre: i.nombre,
         cantidad: i.cantidad,
         precio: i.precio,
@@ -1827,25 +1838,47 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   const maxV=Math.max(...porVend.map(x=>x.total),1);
   const porMet=METODOS_PAGO.map(m=>({m,total:vSel.filter(v=>v.metodo_pago===m).reduce((s,v)=>s+(v.total||0),0),cant:vSel.filter(v=>v.metodo_pago===m).length})).filter(x=>x.cant>0).sort((a,b)=>b.total-a.total);
   const maxM=Math.max(...porMet.map(x=>x.total),1);
+  // Agrupar por producto_id cuando está disponible -- así un producto renombrado sigue
+  // sumando a la misma serie histórica en vez de aparecer como uno nuevo. Fallback a
+  // nombre para ventas viejas que todavía no tienen el vínculo (ver CLAUDE.md).
+  function claveProducto(i){ return i.producto_id ? `id:${i.producto_id}` : `nombre:${i.nombre}`; }
+  function nombreActualProducto(clave,nombreOriginal){
+    if(clave.startsWith("id:")){
+      const prod = productos.find(p=>p.id===parseInt(clave.slice(3)));
+      if(prod) return prod.nombre;
+    }
+    return nombreOriginal;
+  }
+
   // Mas vendidos: calcular desde vSel
-  const vendidosPorProd=vSel.reduce((acc,v)=>{(v.items||[]).forEach(i=>{if(i.nombre)acc[i.nombre]=(acc[i.nombre]||0)+(i.cantidad||0);});return acc;},{});
-  const topProd=Object.entries(vendidosPorProd).map(([nombre,cant])=>({nombre,cant})).sort((a,b)=>b.cant-a.cant).slice(0,5);
+  const vendidosPorProd=vSel.reduce((acc,v)=>{
+    (v.items||[]).forEach(i=>{
+      if(!i.nombre) return;
+      const clave=claveProducto(i);
+      if(!acc[clave]) acc[clave]={cant:0,nombreOriginal:i.nombre};
+      acc[clave].cant+=(i.cantidad||0);
+    });
+    return acc;
+  },{});
+  const topProd=Object.entries(vendidosPorProd).map(([clave,{cant,nombreOriginal}])=>({nombre:nombreActualProducto(clave,nombreOriginal),cant})).sort((a,b)=>b.cant-a.cant).slice(0,5);
   const maxP=Math.max(...topProd.map(p=>p.cant),1);
 
   // Pareto data — top 20 por cantidad o ganancia
-  const paretoCantData=Object.entries(vendidosPorProd).map(([nombre,cant])=>({nombre,valor:cant})).sort((a,b)=>b.valor-a.valor).slice(0,20);
-  // Ganancia por producto: (precio − costo) × cantidad de cada item, sumados por nombre
+  const paretoCantData=Object.entries(vendidosPorProd).map(([clave,{cant,nombreOriginal}])=>({nombre:nombreActualProducto(clave,nombreOriginal),valor:cant})).sort((a,b)=>b.valor-a.valor).slice(0,20);
+  // Ganancia por producto: (precio − costo) × cantidad de cada item, sumados por producto
   const gananciaPorProd=vSel.reduce((acc,v)=>{
     const desc=v.descuento||0;
     (v.items||[]).forEach(i=>{
       if(!i.nombre)return;
+      const clave=claveProducto(i);
       const precioConDesc=(i.precio||0)*(1-desc/100);
       const ganItem=(precioConDesc-(i.costo||0))*(i.cantidad||0);
-      acc[i.nombre]=(acc[i.nombre]||0)+ganItem;
+      if(!acc[clave]) acc[clave]={valor:0,nombreOriginal:i.nombre};
+      acc[clave].valor+=ganItem;
     });
     return acc;
   },{});
-  const paretoGanData=Object.entries(gananciaPorProd).map(([nombre,valor])=>({nombre,valor:Math.round(valor)})).sort((a,b)=>b.valor-a.valor).slice(0,20);
+  const paretoGanData=Object.entries(gananciaPorProd).map(([clave,{valor,nombreOriginal}])=>({nombre:nombreActualProducto(clave,nombreOriginal),valor:Math.round(valor)})).sort((a,b)=>b.valor-a.valor).slice(0,20);
   const sinCobrar=ventas.filter(v=>!v.cobrado);
   const sinEntregar=ventas.filter(v=>!v.entregado);
   const alertasStock=productos.filter(p=>p.activo&&estadoStock(p)!=="ok");
@@ -3312,7 +3345,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
     const ganancia=total-costos-comision;
     await onEditar(editandoV.id,{cliente_nombre:evCliente,vendedor:evVendedor,metodo_pago:evMetodo,cobrado:evCobrado,entregado:evEntregado,comision_plataforma:comision,total,ganancia});
     await supabase.from("venta_items").delete().eq("venta_id",editandoV.id);
-    if(itemsNum.length>0) await supabase.from("venta_items").insert(itemsNum.map(i=>({venta_id:editandoV.id,nombre:i.nombre,cantidad:i.cantidad,precio:i.precio,costo:i.costo||0})));
+    if(itemsNum.length>0) await supabase.from("venta_items").insert(itemsNum.map(i=>({venta_id:editandoV.id,producto_id:i.producto_id||null,nombre:i.nombre,cantidad:i.cantidad,precio:i.precio,costo:i.costo||0})));
     setEvLoading(false); setEditandoV(null);
   }
   function abrirQuickEdit(v){
@@ -3572,7 +3605,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   function abrirEditarVenta(v){setEditandoV(v);setEvCliente(v.cliente_nombre||"");setEvVendedor(v.vendedor||"");setEvMetodo(v.metodo_pago||METODOS_PAGO[0]);setEvCobrado(v.cobrado??true);setEvEntregado(v.entregado??true);setEvComision(String(v.comision_plataforma||0));setEvDescuento(String(v.descuento||0));setEvItems((v.items||[]).map(i=>({...i,precio:String(i.precio),cantidad:String(i.cantidad)})));}
   function actualizarItem(idx,campo,valor){setEvItems(prev=>prev.map((it,i)=>i===idx?{...it,[campo]:valor}:it));}
   function eliminarItemEv(idx){setEvItems(prev=>prev.filter((_,i)=>i!==idx));}
-  function agregarItemEv(prod){setEvItems(prev=>[...prev,{nombre:prod.nombre,cantidad:"1",precio:String(prod.precio_min),costo:prod.costo||0}]);setEvBusqueda("");}
+  function agregarItemEv(prod){setEvItems(prev=>[...prev,{nombre:prod.nombre,cantidad:"1",precio:String(prod.precio_min),costo:prod.costo||0,producto_id:prod.id}]);setEvBusqueda("");}
   async function guardarVenta(){
     if(!editandoV)return;setEvLoading(true);
     const itemsN=evItems.map(i=>({...i,cantidad:parseFloat(i.cantidad)||0,precio:parseFloat(i.precio)||0}));
@@ -3583,7 +3616,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
     const comision=parseFloat(evComision)||0;
     await onEditar(editandoV.id,{cliente_nombre:evCliente,vendedor:evVendedor,metodo_pago:evMetodo,entregado:evEntregado,comision_plataforma:comision,descuento:desc,total,ganancia:total-costos-comision});
     await supabase.from("venta_items").delete().eq("venta_id",editandoV.id);
-    if(itemsN.length>0)await supabase.from("venta_items").insert(itemsN.map(i=>({venta_id:editandoV.id,nombre:i.nombre,cantidad:i.cantidad,precio:i.precio,costo:i.costo||0})));
+    if(itemsN.length>0)await supabase.from("venta_items").insert(itemsN.map(i=>({venta_id:editandoV.id,producto_id:i.producto_id||null,nombre:i.nombre,cantidad:i.cantidad,precio:i.precio,costo:i.costo||0})));
 
     // ── Ajustar stock: comparar items originales vs nuevos ──
     const itemsOrig = editandoV.items||[];
