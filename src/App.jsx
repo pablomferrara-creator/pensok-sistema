@@ -6336,7 +6336,7 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,o
   const prodFilt=useMemo(()=>{if(!prodBusq)return[];const q=prodBusq.toLowerCase();return productos.filter(p=>p.activo&&(p.nombre.toLowerCase().includes(q)||p.codigo.toLowerCase().includes(q)));},[prodBusq,productos]);
   const [fechaAbast, setFechaAbast]=useState(hoy());
   const [egresoLink, setEgresoLink]=useState("");
-  const valido=items.length>0;
+  const valido=items.some(i=>i.cantidad!==0);
   const totalLote=items.reduce((s,i)=>s+i.cantidad*i.costoUnit,0);
 
   function agregarItem(p){
@@ -6362,7 +6362,7 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,o
 
   async function registrar(){
     if(!valido)return;setLoading(true);
-    const filas = items.map(i=>({
+    const filas = items.filter(i=>i.cantidad!==0).map(i=>({
       fecha:fechaAbast||hoy(), producto_id:i.productoId, nombre:i.nombre,
       cantidad:i.cantidad, costo_unit:i.costoUnit,
       proveedor, metodo_pago:metodo||METODOS_PAGO[0], responsable:resp||"Pensok",
@@ -6412,7 +6412,8 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,o
                         <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</div>
                         {prod&&<div style={{fontSize:11,color:G.textoSec}}>Stock actual: {prod.stock} → {prod.stock+it.cantidad}</div>}
                       </div>
-                      <input type="number" value={it.cantidad} min="1" onChange={e=>{const n=parseInt(e.target.value)||1;setItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,cantidad:Math.max(1,n)}:i));}}
+                      <input type="number" value={it.cantidad} onChange={e=>{const raw=e.target.value;const n=parseInt(raw);setItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,cantidad:raw===""?0:(isNaN(n)?0:n)}:i));}}
+                        title="Cantidad ingresada. Poné un número negativo (ej. -1) para corregir/descontar stock."
                         style={{width:56,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"6px 8px",color:G.texto,fontSize:12,textAlign:"center"}}/>
                       <input type="number" value={it.costoUnit} onChange={e=>setItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,costoUnit:parseFloat(e.target.value)||0}:i))}
                         style={{width:90,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"6px 8px",color:G.texto,fontSize:12,textAlign:"right"}} title="Costo unitario"/>
