@@ -4017,7 +4017,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   </>);
 }
 
-function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onRegistrarDescuento,onEliminarDescuento}){
+function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],traspasos=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onRegistrarDescuento,onEliminarDescuento}){
   const [filtroT,setFT]=useState("Todos");
   const [filtroP,setFP]=useState("Todos");
   const [filtroF,setFF]=useState("");
@@ -4117,6 +4117,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   ).map(([persona,deuda])=>({persona,deuda})).filter(d=>d.deuda>0);
   // Deuda de Pensok a proveedores
   const deudaPensok=egresos.filter(e=>e.pagador==="Pensok"&&e.reembolso_pendiente&&!e.reembolsado).reduce((s,e)=>s+(e.monto||0)-(e.monto_reembolsado||0),0);
+  // Solo en Caamaño: cuanto le debe a Pilar por traspasos de mercadería sin pagar todavía.
+  // No es un egreso -- es la contracara de ModuloTraspasos (que solo se ve desde Pilar) --
+  // por eso se calcula acá aparte, a partir de la tabla `traspasos` (replicada en ambos locales).
+  const deudaTraspasos = localKey==="camanio" ? traspasos.filter(t=>t.estado!=="pagado").reduce((s,t)=>s+(t.saldo_pendiente||0),0) : 0;
   const colorT={"Gasto fijo":"azul","Gasto variable":"gris","Retiro de capital":"amarillo"};
 
   async function eliminarCliente(id){
@@ -4220,7 +4224,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
         );
       })()}
 
-      {(deudasPers.length>0||deudaPensok>0)&&(
+      {(deudasPers.length>0||deudaPensok>0||deudaTraspasos>0)&&(
         <Card style={{border:`1px solid #FFB80033`,background:"#FFB80006"}}>
           <ST>💸 Reembolsos pendientes</ST>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
@@ -4247,6 +4251,17 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                 </div>
                 <div style={{fontSize:18,fontWeight:700,color:G.rojo,fontFamily:"'DM Mono',monospace"}}>{fmt(deudaPensok)}</div>
                 <div style={{fontSize:11,color:G.textoSec}}>Pensok debe a proveedores · click para filtrar</div>
+              </div>
+            )}
+            {deudaTraspasos>0&&(
+              <div style={{background:G.sup2,border:`1px solid #4D9EFF44`,borderRadius:10,padding:"10px 16px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <Avatar nombre="Pilar" size={28} color={G.azul}/>
+                  <span style={{fontWeight:600,fontSize:13}}>Pilar</span>
+                  <Badge color="azul">Traspasos</Badge>
+                </div>
+                <div style={{fontSize:18,fontWeight:700,color:G.azul,fontFamily:"'DM Mono',monospace"}}>{fmt(deudaTraspasos)}</div>
+                <div style={{fontSize:11,color:G.textoSec}}>Caamaño le debe por traspasos de mercadería</div>
               </div>
             )}
           </div>
@@ -9279,7 +9294,7 @@ export default function App(){
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
-              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
+              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} traspasos={data.traspasos} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
