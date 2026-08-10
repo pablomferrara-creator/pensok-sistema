@@ -1422,6 +1422,7 @@ function useData(toast){
   const [traspasos,        setTraspasos]        = useState([]);
   const [pagosTraspaso,    setPagosTraspaso]    = useState([]);
   const [totalDeudaCamanio,setTotalDeudaCamanio]= useState(0);
+  const [deudaAPilar,      setDeudaAPilar]      = useState(0);
 
   async function cargarTraspasos(){
     const [{data:tr},{data:pg}] = await Promise.all([
@@ -1434,6 +1435,14 @@ function useData(toast){
     if(localKey==="pilar"){
       const {data:saldo} = await supabase.from("traspasos").select("saldo_pendiente").neq("estado","pagado");
       setTotalDeudaCamanio((saldo||[]).reduce((s,t)=>s+(t.saldo_pendiente||0),0));
+    }
+    // Deuda de Caamaño hacia Pilar (solo en Caamaño): se lee directo de la base de Pilar
+    // (vía supabaseOtro, el cliente cruzado) en vez de la copia replicada en `traspasos` acá --
+    // esa copia se desincroniza de la real cuando dos traspasos comparten fecha (ver nota en
+    // registrarPagoTraspaso), así que no es confiable como fuente para este número.
+    if(localKey==="camanio"){
+      const {data:saldoPilar} = await supabaseOtro.from("traspasos").select("saldo_pendiente").neq("estado","pagado");
+      setDeudaAPilar((saldoPilar||[]).reduce((s,t)=>s+(t.saldo_pendiente||0),0));
     }
   }
 
@@ -1519,6 +1528,11 @@ function useData(toast){
           monto_reembolsado:monto, saldo_pendiente:0, notas:notas||""
         });
         // Actualizar saldo traspaso en Caamaño
+        // OJO: matchea por fecha nada más -- no hay ningún id compartido entre la fila de Pilar
+        // y su espejo en Caamaño. Con dos traspasos de la misma fecha, maybeSingle() no devuelve
+        // una fila única y esto se salta en silencio, dejando la copia de Caamaño con saldo
+        // viejo (bug real, encontrado el 2026-08-10, no arreglado todavía). Por eso el saldo que
+        // Caamaño le debe a Pilar se lee directo de Pilar (`deudaAPilar` más arriba), no de acá.
         const {data:tc}=await supabaseCamanio.from("traspasos").select("id,monto_pagado,total").eq("fecha",traspaso.fecha).maybeSingle();
         if(tc){
           const nm=(tc.monto_pagado||0)+monto;
@@ -1772,7 +1786,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
 }
 
 // ============================================================
@@ -4017,7 +4031,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   </>);
 }
 
-function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],traspasos=[],onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onRegistrarDescuento,onEliminarDescuento}){
+function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],deudaAPilar=0,onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onRegistrarDescuento,onEliminarDescuento}){
   const [filtroT,setFT]=useState("Todos");
   const [filtroP,setFP]=useState("Todos");
   const [filtroF,setFF]=useState("");
@@ -4118,9 +4132,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   // Deuda de Pensok a proveedores
   const deudaPensok=egresos.filter(e=>e.pagador==="Pensok"&&e.reembolso_pendiente&&!e.reembolsado).reduce((s,e)=>s+(e.monto||0)-(e.monto_reembolsado||0),0);
   // Solo en Caamaño: cuanto le debe a Pilar por traspasos de mercadería sin pagar todavía.
-  // No es un egreso -- es la contracara de ModuloTraspasos (que solo se ve desde Pilar) --
-  // por eso se calcula acá aparte, a partir de la tabla `traspasos` (replicada en ambos locales).
-  const deudaTraspasos = localKey==="camanio" ? traspasos.filter(t=>t.estado!=="pagado").reduce((s,t)=>s+(t.saldo_pendiente||0),0) : 0;
+  // No es un egreso -- es la contracara de ModuloTraspasos (que solo se ve desde Pilar) -- por
+  // eso viene ya calculado desde useData como `deudaAPilar`, leído directo de la base de Pilar
+  // (no de la copia local de `traspasos`, que puede desincronizarse -- ver nota en registrarPagoTraspaso).
+  const deudaTraspasos = deudaAPilar;
   const colorT={"Gasto fijo":"azul","Gasto variable":"gris","Retiro de capital":"amarillo"};
 
   async function eliminarCliente(id){
@@ -9294,7 +9309,7 @@ export default function App(){
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
-              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} traspasos={data.traspasos} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
+              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} deudaAPilar={data.deudaAPilar} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
