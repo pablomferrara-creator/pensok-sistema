@@ -1182,7 +1182,7 @@ function useData(toast){
   async function asegurarValorStockDiario(){
     const fechaHoy = hoy();
     if(historialValorStock.some(h=>h.fecha===fechaHoy)) return;
-    const valorArs = productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0);
+    const valorArs = productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,p.stock),0);
     // Dólar oficial venta del día, misma fuente (dolarapi.com) que usa la pestaña de
     // Actualizar Precios -- no el tipoCambio en memoria, que no se persiste entre sesiones.
     let tcOficialVenta = null;
@@ -1971,7 +1971,7 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   const sinCobrar=ventas.filter(v=>!v.cobrado);
   const sinEntregar=ventas.filter(v=>!v.entregado);
   const alertasStock=productos.filter(p=>p.activo&&estadoStock(p)!=="ok");
-  const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0);
+  const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,p.stock),0);
 
   const labelPeriodo=periodo==="hoy"?"Hoy":periodo==="dia"?diaEsp:periodo==="mes"?"Este mes":periodo==="mesEsp"?mesEsp:"Este año";
 
@@ -5321,7 +5321,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       if(ea!==eb)return ea-eb;
       return (a.proveedor||"").localeCompare(b.proveedor||"");
     });
-  const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0);
+  const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,p.stock),0);
   const marcasUnicas=useMemo(()=>["Todas",...new Set(productos.map(p=>p.marca||"").filter(Boolean)).values()].sort(),[productos]);
   const provsUnicos =useMemo(()=>["Todos",...new Set(productos.map(p=>p.proveedor||"").filter(Boolean)).values()].sort(),[productos]);
 

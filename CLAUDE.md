@@ -109,6 +109,25 @@ nuevo, o eligiendo un nombre.
   `filtroTareasResp`/`irATareasDe` en `App`, `filtroRespInicial`/`onConsumirFiltroResp` en
   `ModuloTareas`) — no es un patrón nuevo.
 
+## Valor de stock — no debe contar negativo el stock negativo (2026-08-10)
+
+Las 3 fórmulas que calculan "valor de stock a costo" (`asegurarValorStockDiario` — la foto
+diaria que arma `historial_valor_stock`, el `MetricCard` de `ModuloAnalisis`/Dashboard, y el de
+`ModuloProductos`) hacían `productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*p.stock,0)` sin
+piso en cero. Un producto con stock negativo (pasa seguido acá: se vende y se va a buscar al
+proveedor después, o los vendedores envasan/venden y cargan el Abastecimiento más tarde) restaba
+su costo del total en vez de sumar cero — un producto en -75 unidades no representa "perdimos esa
+plata", representa "todavía no lo compramos", así que no debería bajar el valor de los activos
+que sí tenés físicamente. Bug real encontrado por Pablo el 2026-08-10 al notar una caída rara en
+"Detalle por día"; confirmado contra la base: 16 productos en negativo restando **$2.670.334** en
+Pilar, 4 restando **$290.462** en Caamaño, al momento del fix.
+
+**Fix**: las 3 fórmulas ahora usan `Math.max(0,p.stock)` en vez de `p.stock` directo. Esto NO
+retroactiva el historial ya guardado en `historial_valor_stock` — cada fila es una foto agregada
+del día (no se guardó el detalle por producto), así que no hay forma de recalcular los valores
+históricos con la fórmula corregida. Solo las fotos de acá en adelante quedan bien. Ojo si se
+agrega alguna otra métrica que sume `costo*stock` en el futuro: mismo criterio, `Math.max(0,...)`.
+
 ## Control de Stock (conteo físico + ajuste)
 
 Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubir". Tablas nuevas por local (`conteos_stock`, `conteos_stock_items` — igual que `devoluciones`, no compartidas entre Pilar y Caamaño porque el stock es independiente).
