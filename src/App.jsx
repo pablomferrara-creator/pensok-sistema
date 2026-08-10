@@ -231,6 +231,74 @@ function NavGroupDropdown({label,items,modulo,onSelect}){
 }
 
 // ============================================================
+// PANEL FLOTANTE DE TAREAS PENDIENTES POR PERSONA
+// ============================================================
+// Arranca siempre colapsado (PC y mobile) para no robar espacio de pantalla -- se expande
+// al tocar el pill y se cierra tocando afuera, tocando el pill de nuevo, o eligiendo un nombre.
+// Abajo a la izquierda a propósito, para no pisar los toasts (abajo a la derecha).
+function TareasFlotante({tareas=[],localKey,onIrA}){
+  const [open,setOpen]=useState(false);
+  const btnRef=useRef(null);
+  const panelRef=useRef(null);
+
+  useEffect(()=>{
+    function onDocClick(e){
+      if(btnRef.current?.contains(e.target)) return;
+      if(panelRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown",onDocClick);
+    return ()=>document.removeEventListener("mousedown",onDocClick);
+  },[]);
+
+  const porPersona = useMemo(()=>{
+    const acc={};
+    const hoyStr=hoy();
+    (tareas||[]).forEach(t=>{
+      if(t.estado==="hecha") return;
+      if(!t.responsable) return;
+      if(!(t.local===localKey||t.local==="ambos")) return;
+      const vencida = !!(t.fecha_limite && t.fecha_limite<=hoyStr);
+      const cur = acc[t.responsable]||{total:0,vencidas:0};
+      cur.total+=1; if(vencida) cur.vencidas+=1;
+      acc[t.responsable]=cur;
+    });
+    return Object.entries(acc).map(([nombre,v])=>({nombre,...v})).sort((a,b)=>b.total-a.total);
+  },[tareas,localKey]);
+  const totalPend = porPersona.reduce((s,p)=>s+p.total,0);
+
+  if(totalPend===0) return null;
+
+  return createPortal(
+    <div style={{position:"fixed",left:16,bottom:16,zIndex:200,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:8}}>
+      {open&&(
+        <div ref={panelRef} style={{background:G.sup,border:`1px solid ${G.borde}`,borderRadius:12,boxShadow:"0 8px 24px #00000055",padding:12,width:"min(280px, calc(100vw - 32px))",maxHeight:"55vh",overflowY:"auto"}}>
+          <div style={{fontSize:11,fontWeight:600,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5,padding:"2px 6px 8px"}}>📋 Tareas pendientes por persona</div>
+          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+            {porPersona.map(p=>(
+              <div key={p.nombre} onClick={()=>{onIrA(p.nombre);setOpen(false);}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"8px 8px",borderRadius:8,cursor:"pointer",transition:"background .15s"}}
+                onMouseEnter={e=>e.currentTarget.style.background=G.sup2} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                  <Avatar nombre={p.nombre} size={24}/>
+                  <span style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.nombre}</span>
+                </div>
+                <span style={{fontFamily:"'DM Mono',monospace",fontWeight:700,fontSize:13,color:p.vencidas>0?G.rojo:G.texto,flexShrink:0}}>{p.total}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <button ref={btnRef} onClick={()=>setOpen(o=>!o)}
+        style={{display:"flex",alignItems:"center",gap:7,background:G.verde,color:"#000",border:"none",borderRadius:999,padding:"9px 15px",fontWeight:600,fontSize:12.5,cursor:"pointer",boxShadow:"0 4px 14px #00000044"}}>
+        📋 {totalPend} tarea{totalPend!==1?"s":""} pendiente{totalPend!==1?"s":""}
+      </button>
+    </div>,
+    document.body
+  );
+}
+
+// ============================================================
 // TOAST NOTIFICATIONS
 // ============================================================
 function Toast({toasts}){
@@ -7426,7 +7494,7 @@ const fechaCal = (y,m,d)=>`${y}-${String(m+1).padStart(2,"0")}-${String(d).padSt
 const labelLocalTarea = (v)=>LOCALES_TAREA.find(l=>l.value===v)?.label||v;
 const colorPrioridad = (p)=>p==="alta"?G.rojo:p==="media"?G.amarillo:G.textoSec;
 
-function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[],onGuardar,onCambiarEstado,onEliminar,esAdmin=true,usuarioEmail=""}){
+function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[],onGuardar,onCambiarEstado,onEliminar,esAdmin=true,usuarioEmail="",filtroRespInicial="",onConsumirFiltroResp}){
   // Nombre del vendedor asociado al usuario logueado (cruzando por email en ambos locales),
   // para saber si es el responsable de una tarea puntual.
   const miNombre = useMemo(()=>{
@@ -7458,7 +7526,14 @@ function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[]
   const [comentarioCierre,setComentarioCierre] = useState("");
   const [loading,setLoad]              = useState(false);
   // Filtros
-  const [fResp,setFResp]         = useState("Todos");
+  const [fResp,setFResp]         = useState(filtroRespInicial||"Todos");
+  // Si llega un responsable desde el panel flotante de tareas pendientes, aplicarlo como filtro.
+  useEffect(()=>{
+    if(filtroRespInicial){
+      setFResp(filtroRespInicial);
+      onConsumirFiltroResp&&onConsumirFiltroResp();
+    }
+  },[filtroRespInicial]);
   const [fLocalF,setFLocalF]     = useState(localKey); // por defecto lo del local actual (+ las de "ambos")
   const [fProyecto,setFProyecto] = useState("Todos");
   const [buscar,setBuscar]       = useState("");
@@ -9129,6 +9204,8 @@ export default function App(){
   const [modulo,   setModulo]   = useState("analisis");
   const [filtroIngresos, setFiltroIngresos] = useState("");
   const [filtroEgresos, setFiltroEgresos] = useState("");
+  const [filtroTareasResp, setFiltroTareasResp] = useState("");
+  function irATareasDe(nombre){ setFiltroTareasResp(nombre); setModulo("tareas"); }
   // Filtros persistentes por módulo (sobreviven recargas de datos)
   const [ingFiltros, setIngFiltros] = useState({vend:"Todos",met:"Todos",fecha:"",estado:"",cliente:"Todos"});
   const [egrFiltros, setEgrFiltros] = useState({tipo:"Todos",pagador:"Todos",fecha:""});
@@ -9316,12 +9393,13 @@ export default function App(){
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
               {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} descuentosEgreso={data.descuentosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
-              {modulo==="tareas"         && <ModuloTareas         tareas={data.tareas} responsables={data.responsables} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} onGuardar={data.guardarTarea} onCambiarEstado={data.cambiarEstadoTarea} onEliminar={data.eliminarTarea} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
+              {modulo==="tareas"         && <ModuloTareas         tareas={data.tareas} responsables={data.responsables} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} onGuardar={data.guardarTarea} onCambiarEstado={data.cambiarEstadoTarea} onEliminar={data.eliminarTarea} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""} filtroRespInicial={filtroTareasResp} onConsumirFiltroResp={()=>setFiltroTareasResp("")}/>}
               {modulo==="configuracion"  && <ModuloConfiguracion  vendedores={data.vendedores} onGuardar={data.guardarVendedor} onToggle={data.toggleVendedor} proveedores={data.proveedores} onGuardProv={data.guardarProveedor} onToggleProv={data.toggleProveedor} productos={data.productos} tipoCambio={data.tipoCambio} onActualizarTC={data.actualizarTipoCambio} onActualizarPct={data.actualizarPorcentaje} onActualizarCSV={data.actualizarDesdeCSV}/>}
             </>)
           }
         </div>
       </div>
+      <TareasFlotante tareas={data.tareas} localKey={localKey} onIrA={irATareasDe}/>
       <Toast toasts={toast.toasts}/>
     </>
   );

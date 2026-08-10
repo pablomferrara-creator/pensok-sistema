@@ -77,6 +77,33 @@ Si `npm run build` no tira error, el archivo compila. **Siempre correrlo antes d
 - **Card "💸 Reembolsos pendientes" (`ModuloEgresos`) solo se mostraba si había deuda con vendedores** (`deudasPers.length>0`), aunque hubiera deuda de Pensok con proveedores (`deudaPensok>0`) — bug real, arreglado el 2026-08-10: ahora la condición es `deudasPers.length>0||deudaPensok>0`. Si en Caamaño no aparece esta sección es porque hoy no hay ningún egreso con `reembolso_pendiente=true` ahí (verificado por consulta directa) — es un estado vacío real, no un bug de visualización.
 - **Deuda por Traspasos en el card "Reembolsos pendientes"** (2026-08-10): solo en Caamaño (`localKey==="camanio"`) se agregó un tercer bloque que muestra cuánto le debe a Pilar por traspasos de mercadería sin saldar todavía. **Ojo con la fuente del dato**: la primera versión de esto sumó `saldo_pendiente` de la copia LOCAL de `traspasos` en Caamaño (replicada desde Pilar) y dio un número mal — bien más alto que el real ($1.627.322 / 17 traspasos vs. el real $337.218 / 7). La causa es un bug preexistente en `registrarPagoTraspaso`: al pagar un traspaso en Pilar, la actualización del espejo en Caamaño matchea la fila por `fecha` nada más (no hay ningún id compartido entre ambas copias) — con dos traspasos de la misma fecha, `maybeSingle()` no encuentra una fila única y la actualización se salta en silencio, dejando la copia de Caamaño con saldo viejo. Ese bug de sincronización sigue sin arreglarse (no afectaba nada visible hasta ahora porque `ModuloTraspasos`, que sí usa esa copia, es `soloPilar`). La solución para este card fue no depender de la copia: `deudaAPilar` se calcula en `useData`/`cargarTraspasos()` leyendo la tabla `traspasos` DIRECTO de la base de Pilar vía `supabaseOtro` (el cliente cruzado ya existente), así siempre coincide con lo que Pilar ve en su propio módulo de Traspasos.
 
+## Panel flotante de Tareas pendientes (2026-08-10)
+
+`TareasFlotante` (componente propio, cerca de `NavGroupDropdown`) — pill fijo abajo a la
+izquierda (a propósito, para no pisar los toasts que salen abajo a la derecha), visible en
+cualquier módulo porque se renderiza una sola vez al final del `return` de `App`, junto al
+`<Toast/>`. Arranca siempre colapsado (mismo comportamiento en PC y mobile — Pablo lo pidió así
+porque en mobile no sobra espacio para tenerlo expandido de forma permanente) y al tocarlo
+despliega una tabla con cada responsable y su cantidad de tareas pendientes (rojo si tiene
+alguna vencida o que vence hoy, mismo criterio que ya usa el badge de la pestaña Tareas). Se
+cierra tocando afuera (mismo patrón de outside-click que `NavGroupDropdown`), tocando el pill de
+nuevo, o eligiendo un nombre.
+
+- **Por qué existe**: el badge de Tareas vivía escondido adentro del dropdown del grupo "Otros"
+  del menú — había que abrirlo para verlo. Este panel lo saca de ahí para que se note sin tener
+  que navegar a ningún lado.
+- **Se cuentan TODAS las pendientes de cada persona** (no solo vencidas) para reflejar la carga
+  real — la vencida solo cambia el color del número, no filtra qué se cuenta.
+- Solo se agrupan tareas **con responsable asignado** — no hay fila "Sin asignar" (a propósito,
+  ver conversación: el pedido fue "una tabla con los nombres de cada uno").
+- Filtra por el local activo igual que el resto (`t.local===localKey||t.local==="ambos"`).
+- Si el total de pendientes da 0, el componente no renderiza nada (`return null`) — no hay pill
+  vacío dando vueltas.
+- **Click en un nombre navega a Tareas con el filtro de responsable ya aplicado**, reusando el
+  mismo mecanismo de "filtro inicial + consumirFiltro" que ya usan Egresos e Ingresos (acá:
+  `filtroTareasResp`/`irATareasDe` en `App`, `filtroRespInicial`/`onConsumirFiltroResp` en
+  `ModuloTareas`) — no es un patrón nuevo.
+
 ## Control de Stock (conteo físico + ajuste)
 
 Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubir". Tablas nuevas por local (`conteos_stock`, `conteos_stock_items` — igual que `devoluciones`, no compartidas entre Pilar y Caamaño porque el stock es independiente).
