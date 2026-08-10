@@ -568,8 +568,11 @@ function useData(toast){
       }
     }
 
-    // 5. Registrar pago en pagos_deuda para trazabilidad
-    if(venta.cobrado){
+    // 5. Registrar pago en pagos_deuda para trazabilidad. Corre tanto si quedó cobrada del
+    // todo (venta.cobrado) como si hubo un pago PARCIAL en el momento (venta.cobrado=false
+    // pero venta.monto_cobrado>0) -- si no, un cobro parcial hecho al cerrar la venta se
+    // pierde por completo (ni queda el pago trazado ni el saldo pendiente en la venta).
+    if(venta.cobrado||(venta.monto_cobrado>0)){
       const montoCobrado = venta.monto_cobrado||total;
       await supabase.from("pagos_deuda").insert({
         referencia_id: vData.id,
@@ -2840,7 +2843,9 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
     if(tipoPago==="total"){
       await cerrarVentaFinal(true, total, 0);
     } else {
-      await cerrarVentaFinal(true, monto, total - monto);
+      // Pago parcial: NO queda cobrada -- todavía tiene saldo pendiente, tiene que poder
+      // seguir apareciendo en Ingresos con "Registrar cobro" hasta que se salde el resto.
+      await cerrarVentaFinal(false, monto, total - monto);
     }
     setModalPago(false);
   }
