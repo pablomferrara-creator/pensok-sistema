@@ -1972,6 +1972,9 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   const sinEntregar=ventas.filter(v=>!v.entregado);
   const alertasStock=productos.filter(p=>p.activo&&estadoStock(p)!=="ok");
   const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,p.stock),0);
+  // Plata comprometida en productos que ya se vendieron/envasaron pero todavía no se
+  // abastecieron (stock negativo) -- se muestra aparte, nunca restando de valorStock.
+  const pendienteAbastecer=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,-p.stock),0);
 
   const labelPeriodo=periodo==="hoy"?"Hoy":periodo==="dia"?diaEsp:periodo==="mes"?"Este mes":periodo==="mesEsp"?mesEsp:"Este año";
 
@@ -2283,8 +2286,13 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
           <MetricCard label="Sin entregar — click para ver" value={fmtNum(sinEntregar.length)} color={G.amarillo} sub="ventas pendientes de entrega" accent={"#FFB80033"}/>
         </div>
       </div>
-      <div onClick={()=>onNavegar("valor_stock")} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
-        <MetricCard label="Valor stock a costo — click para ver evolución" value={fmt(valorStock)} color={G.azul} sub="a costo · ver evolución en ARS/USD" accent={"#4D9EFF33"}/>
+      <div className="psk-grid-2" style={{display:"grid",gridTemplateColumns:pendienteAbastecer>0?"1fr 1fr":"1fr",gap:12}}>
+        <div onClick={()=>onNavegar("valor_stock")} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+          <MetricCard label="Valor stock a costo — click para ver evolución" value={fmt(valorStock)} color={G.azul} sub="a costo · ver evolución en ARS/USD" accent={"#4D9EFF33"}/>
+        </div>
+        {pendienteAbastecer>0&&(
+          <MetricCard label="Pendiente de abastecer" value={fmt(pendienteAbastecer)} color={G.naranja} sub="vendido/envasado sin cargar todavía · no resta del valor de stock" accent={"#FF8C4244"}/>
+        )}
       </div>
       {alertasStock.length>0&&(
         <div onClick={()=>{onNavegar("productos");setTimeout(()=>{const el=document.getElementById("panel-reposicion");if(el)el.scrollIntoView({behavior:"smooth"});},300);}} style={{cursor:"pointer",transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=".8"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
@@ -5322,6 +5330,9 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       return (a.proveedor||"").localeCompare(b.proveedor||"");
     });
   const valorStock=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,p.stock),0);
+  // Plata comprometida en productos que ya se vendieron/envasaron pero todavía no se
+  // abastecieron (stock negativo) -- se muestra aparte, nunca restando de valorStock.
+  const pendienteAbastecer=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,-p.stock),0);
   const marcasUnicas=useMemo(()=>["Todas",...new Set(productos.map(p=>p.marca||"").filter(Boolean)).values()].sort(),[productos]);
   const provsUnicos =useMemo(()=>["Todos",...new Set(productos.map(p=>p.proveedor||"").filter(Boolean)).values()].sort(),[productos]);
 
@@ -5572,9 +5583,10 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
 
   return(<>
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+      <div style={{display:"grid",gridTemplateColumns:`repeat(${esAdmin&&pendienteAbastecer>0?5:4},1fr)`,gap:12}}>
         {esAdmin&&<MetricCard label="Activos"     value={fmtNum(productos.filter(p=>p.activo).length)}/>}
         {esAdmin&&<MetricCard label="Valor stock" value={fmt(valorStock)} color={G.azul} sub="a costo"/>}
+        {esAdmin&&pendienteAbastecer>0&&<MetricCard label="Pendiente de abastecer" value={fmt(pendienteAbastecer)} color={G.naranja} sub="vendido/envasado sin cargar · no resta arriba" accent={"#FF8C4244"}/>}
         {esAdmin&&<MetricCard label="Bajo stock"  value={fmtNum(alertas.filter(p=>estadoStock(p)==="bajo").length)}    color={G.amarillo}/>}
         {esAdmin&&<MetricCard label="Agotados"    value={fmtNum(alertas.filter(p=>estadoStock(p)==="agotado").length)} color={G.rojo}/>}
       </div>

@@ -128,6 +128,14 @@ del día (no se guardó el detalle por producto), así que no hay forma de recal
 históricos con la fórmula corregida. Solo las fotos de acá en adelante quedan bien. Ojo si se
 agrega alguna otra métrica que sume `costo*stock` en el futuro: mismo criterio, `Math.max(0,...)`.
 
+**Métrica "Pendiente de abastecer"** (agregada a pedido de Pablo, mismo día): card nueva en
+Dashboard (al lado de "Valor stock a costo") y en Productos (al lado de "Valor stock"), que
+suma `precioARS(costo,moneda)*Math.max(0,-stock)` — el valor absoluto de todo lo que está en
+negativo, mostrado APARTE, nunca restando de `valorStock`. Solo se muestra si da mayor a
+cero (`pendienteAbastecer>0`) para no ensuciar el dashboard cuando no hay nada así. Da
+visibilidad de cuánta plata está "comprometida" en compras que todavía no se cargaron, sin que
+afecte el número de valor de stock real.
+
 ## Control de Stock (conteo físico + ajuste)
 
 Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubir". Tablas nuevas por local (`conteos_stock`, `conteos_stock_items` — igual que `devoluciones`, no compartidas entre Pilar y Caamaño porque el stock es independiente).
