@@ -693,13 +693,17 @@ function useData(toast){
 
   // ── EGRESOS ──────────────────────────────────────────────
   async function registrarEgreso(eg){
-    // El egreso siempre nace sin pagar — los pagos se registran por separado en pagos_egreso
+    // El egreso siempre nace sin pagar — los pagos se registran por separado en pagos_egreso.
+    // Excepción: "Inversión inicial" nunca se paga desde la caja del local, así que no debe
+    // nacer como pendiente de reembolso (si no, aparece como deuda del negocio hacia quien
+    // invirtió, que es semánticamente incorrecto).
+    const esInversion = eg.tipo==="Inversión inicial";
     const payload = {
       ...eg,
-      monto_reembolsado: 0,
-      saldo_pendiente: eg.monto,
-      reembolso_pendiente: true,
-      reembolsado: false,
+      monto_reembolsado: esInversion?(eg.monto||0):0,
+      saldo_pendiente: esInversion?0:eg.monto,
+      reembolso_pendiente: !esInversion,
+      reembolsado: esInversion,
     };
     const{data,error}=await supabase.from("egresos").insert(payload).select().single();
     if(error){toast.err("Error al guardar egreso");return;}
@@ -4216,7 +4220,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
         );
       })()}
 
-      {deudasPers.length>0&&(
+      {(deudasPers.length>0||deudaPensok>0)&&(
         <Card style={{border:`1px solid #FFB80033`,background:"#FFB80006"}}>
           <ST>💸 Reembolsos pendientes</ST>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
