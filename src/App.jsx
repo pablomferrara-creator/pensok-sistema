@@ -2724,7 +2724,9 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
   };
 
   const nombresVend=(vendedores||[]).map(v=>v.nombre);
-  const [vendedor,  setVendedor]  = useState(nombresVend[0]||"");
+  // Sin vendedor precargado a propósito: si queda uno por defecto, en la práctica nunca lo
+  // cambian y las ventas de otro vendedor quedan mal atribuidas. Tiene que elegirse siempre.
+  const [vendedor,  setVendedor]  = useState("");
   const [metodo,    setMetodo]    = useState("Debito MP");
   const [modalidad, setModalidad] = useState(MODALIDADES[0]);
   const [descuento, setDescuento] = useState("0");
@@ -2798,7 +2800,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
 
 
   async function generarPresupuesto(){
-    if(items.length===0)return;
+    if(items.length===0||!vendedor)return;
     setGenPres(true);
     const nroPresupuesto = await onCrearPresupuesto({
       clienteId:clienteId||null, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL",
@@ -2822,7 +2824,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
     : parseFloat(montoPago) > 0 && parseFloat(montoPago) < total;
 
   function abrirModalPago(){
-    if(!items.length) return;
+    if(!items.length||!vendedor) return;
     if(!cobrado){
       // Sin cobrar: registrar directo sin modal
       cerrarVentaFinal(false, 0, 0);
@@ -2860,7 +2862,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
       saldo_cobro: saldoPendiente || undefined,
     },items);
     setLoading(false);setOk(true);
-    setTimeout(()=>{setItems([]);setDescuento("0");setMetodo("Debito MP");setModalidad(MODALIDADES[0]);setClienteId("");setOk(false);},2000);
+    setTimeout(()=>{setItems([]);setDescuento("0");setMetodo("Debito MP");setModalidad(MODALIDADES[0]);setClienteId("");setVendedor("");setOk(false);},2000);
   }
 
   async function cerrarVenta(){
@@ -2975,7 +2977,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
                 return {...i,precio:precioARS(getPrecio(prod,tipo),prod.moneda)};
               }));
             }} options={[{value:"",label:"Consumidor Final (minorista)"},...clientes.map(c=>({value:String(c.id),label:`${c.nombre} (${c.tipo})`}))]}/>
-            <Fi label="Vendedor"       value={vendedor}  onChange={setVendedor}  options={(vendedores||[]).map(v=>v.nombre)}/>
+            <Fi label="Vendedor"       value={vendedor}  onChange={setVendedor}  options={[{value:"",label:"Seleccionar..."},...nombresVend.map(n=>({value:n,label:n}))]}/>
             <Fi label="Metodo de pago" value={metodo}    onChange={cambiarMetodo} options={METODOS_VENTA}/>
             <Fi label="Modalidad"      value={modalidad} onChange={cambiarModalidad} options={MODALIDADES}/>
           </div>
@@ -3047,10 +3049,11 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
           <span style={{fontSize:22,fontWeight:700,color:G.verde,fontFamily:"'DM Mono',monospace"}}>{fmt(total)}</span>
         </div>
         {esAdmin&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:G.textoSec,marginTop:4}}><span>Ganancia</span><span style={{color:G.verde,fontFamily:"'DM Mono',monospace"}}>{fmt(ganancia)}</span></div>}
-        <Btn full className="psk-btn-full" disabled={items.length===0||loading} onClick={cerrarVenta} style={{marginTop:16,padding:"11px 0",fontSize:14}}>
+        {!vendedor&&items.length>0&&<div style={{fontSize:12,color:G.amarillo,marginTop:10}}>⚠ Elegí un vendedor para poder cerrar la venta</div>}
+        <Btn full className="psk-btn-full" disabled={items.length===0||loading||!vendedor} onClick={cerrarVenta} style={{marginTop:8,padding:"11px 0",fontSize:14}}>
           {loading?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:"Cerrar venta →"}
         </Btn>
-        <Btn full variant="secondary" disabled={items.length===0||genPres} onClick={generarPresupuesto} style={{marginTop:8,padding:"10px 0",fontSize:13}}>
+        <Btn full variant="secondary" disabled={items.length===0||genPres||!vendedor} onClick={generarPresupuesto} style={{marginTop:8,padding:"10px 0",fontSize:13}}>
           {genPres?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Generando...</span>:"📄 Extraer Presupuesto"}
         </Btn>
       </Card>
