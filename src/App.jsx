@@ -158,7 +158,7 @@ function Card({children,style,onClick,className}){return <div onClick={onClick} 
 function MetricCard({label,value,sub,color,accent}){return(<div style={{background:G.sup,border:`1px solid ${accent||G.borde}`,borderRadius:12,padding:"16px 18px"}}><div style={{fontSize:11,color:G.textoSec,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>{label}</div><div style={{fontSize:24,fontWeight:600,color:color||G.texto,fontFamily:"'DM Mono',monospace"}}>{value}</div>{sub&&<div style={{fontSize:12,color:G.textoSec,marginTop:3}}>{sub}</div>}</div>);}
 function Btn({children,onClick,variant="primary",small,disabled,style,full}){
   const base={border:"none",borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontFamily:"'DM Sans',sans-serif",fontWeight:500,transition:"all .15s",opacity:disabled?.4:1,width:full?"100%":undefined,...style};
-  const v={primary:{background:G.verde,color:"#000",padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},secondary:{background:G.sup2,color:G.texto,border:`1px solid ${G.borde}`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},danger:{background:"#FF4D6A18",color:G.rojo,border:`1px solid #FF4D6A33`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},ghost:{background:"transparent",color:G.textoSec,padding:small?"3px 8px":"6px 12px",fontSize:small?11:13},outline:{background:"transparent",color:G.verde,border:`1px solid ${G.verde}55`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13}};
+  const v={primary:{background:G.verde,color:"#000",padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},secondary:{background:G.sup2,color:G.texto,border:`1px solid ${G.borde}`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},danger:{background:"#FF4D6A18",color:G.rojo,border:`1px solid #FF4D6A33`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},ghost:{background:"transparent",color:G.textoSec,padding:small?"3px 8px":"6px 12px",fontSize:small?11:13},outline:{background:"transparent",color:G.verde,border:`1px solid ${G.verde}55`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},outlineAzul:{background:"transparent",color:G.azul,border:`1px solid ${G.azul}55`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13}};
   return <button onClick={onClick} disabled={disabled} style={{...base,...v[variant]}}>{children}</button>;
 }
 function Fi({label,value,onChange,type="text",options,placeholder,style,min,rows}){
@@ -4472,7 +4472,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                 <div style={{fontSize:18,fontWeight:700,color:G.rojo,fontFamily:"'DM Mono',monospace"}}>{fmt(e.monto)}</div>
                 {esAdmin&&(()=>{
                   const yaPagado = !(e.reembolso_pendiente&&!e.reembolsado);
-                  return <Btn small variant="outline" style={yaPagado?{color:G.azul,border:`1px solid ${G.azul}55`}:undefined} onClick={()=>{
+                  return <Btn small variant={yaPagado?"outlineAzul":"outline"} onClick={()=>{
                     setModalPagos(e);
                     setNuevoPagoMonto(String(e.saldo_pendiente||e.monto||""));
                     setNuevoPagoMetodo(e.metodo_pago||METODOS_PAGO[0]);
