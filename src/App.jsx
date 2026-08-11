@@ -6858,6 +6858,15 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const devTotalDinero    = devEfectivo + devMP + devBanco;
   const gananciaRevertida = devolucionesDesde.reduce((s,d)=>s+(d.ganancia_revertida||0),0);
 
+  // ── Descuentos de proveedor recibidos en el período ──
+  // Plata real que ENTRA a una billetera (el proveedor te devuelve parte de un egreso ya
+  // pagado) -- tiene que sumar al esperado igual que un cobro, si no el "real" contado en esa
+  // billetera queda con más plata de la que el esperado reconoce, y aparece como sobra falsa.
+  const descuentosDesde = descuentosEgreso.filter(d=>d.fecha>=fechaInicio);
+  const descEfDesde    = descuentosDesde.filter(d=>d.metodo_pago==="Efectivo").reduce((s,d)=>s+(d.monto||0),0);
+  const descMPDesde    = descuentosDesde.filter(d=>MP_METODOS.includes(d.metodo_pago)).reduce((s,d)=>s+(d.monto||0),0);
+  const descBancoDesde = descuentosDesde.filter(d=>BANCO_METODOS.includes(d.metodo_pago)).reduce((s,d)=>s+(d.monto||0),0);
+
   // Monto efectivamente cobrado neto de una venta (soporta pagos parciales y descuenta comisión)
   const cobradoDeVenta = (v) => {
     const comision = v.metodo_pago !== "Efectivo" ? (v.comision_plataforma||0) : 0;
@@ -6915,7 +6924,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
       const vEf   = ventasPorBilletera("caja_chica")+cobEf;
       const gEfPagos  = pagosEgresoDesde.filter(p=>p.metodo_pago==="Efectivo").reduce((s,p)=>s+(p.monto||0),0);
       const gEfLegacy = egresosDesde.filter(e=>e.metodo_pago==="Efectivo").reduce((s,e)=>s+(e.monto||0),0);
-      return vEf - gEfPagos - gEfLegacy - reEf - devEfectivo + movNeto;
+      return vEf - gEfPagos - gEfLegacy - reEf - devEfectivo + descEfDesde + movNeto;
     }
     if(bolsillo==="mp"){
       const cobMP = cobros.filter(p=>MP_METODOS.includes(p.metodo_pago)).reduce((s,p)=>s+p.monto,0);
@@ -6923,7 +6932,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
       const vMP_  = ventasPorBilletera("mp")+cobMP;
       const gMPPagos  = pagosEgresoDesde.filter(p=>MP_METODOS.includes(p.metodo_pago)).reduce((s,p)=>s+(p.monto||0),0);
       const gMPLegacy = egresosDesde.filter(e=>MP_METODOS.includes(e.metodo_pago)).reduce((s,e)=>s+(e.monto||0),0);
-      return vMP_ - gMPPagos - gMPLegacy - reMP - devMP + movNeto;
+      return vMP_ - gMPPagos - gMPLegacy - reMP - devMP + descMPDesde + movNeto;
     }
     if(bolsillo==="banco"){
       const cobBa = cobros.filter(p=>BANCO_METODOS.includes(p.metodo_pago)).reduce((s,p)=>s+p.monto,0);
@@ -6931,7 +6940,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
       const vBa   = ventasPorBilletera("banco")+cobBa;
       const gBaPagos  = pagosEgresoDesde.filter(p=>BANCO_METODOS.includes(p.metodo_pago)).reduce((s,p)=>s+(p.monto||0),0);
       const gBaLegacy = egresosDesde.filter(e=>BANCO_METODOS.includes(e.metodo_pago)).reduce((s,e)=>s+(e.monto||0),0);
-      return vBa - gBaPagos - gBaLegacy - reBa - devBanco + movNeto;
+      return vBa - gBaPagos - gBaLegacy - reBa - devBanco + descBancoDesde + movNeto;
     }
     if(bolsillo==="ahorro"){
       return movNeto;
@@ -7384,11 +7393,11 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {[
                     {l:"Caja Chica",  esp:esperadoCaja,   real:realCaja,   diff:diffCaja,
-                      det:`Arranque ${fmt(arranqueCaja)} + ventas ef. ${fmt(vEfectivo)}${cobDeudaEf>0?` + cobros deuda ef. ${fmt(cobDeudaEf)}`:""}${gEfectivo>0?` − gastos ef. ${fmt(gEfectivo)}`:""}${reembDeudaEf>0?` − reembolsos ef. ${fmt(reembDeudaEf)}`:""}${devEfectivo>0?` − devoluciones ef. ${fmt(devEfectivo)}`:""}${movNetoCaja!==0?` ${movNetoCaja>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoCaja))}`:""}`},
+                      det:`Arranque ${fmt(arranqueCaja)} + ventas ef. ${fmt(vEfectivo)}${cobDeudaEf>0?` + cobros deuda ef. ${fmt(cobDeudaEf)}`:""}${gEfectivo>0?` − gastos ef. ${fmt(gEfectivo)}`:""}${reembDeudaEf>0?` − reembolsos ef. ${fmt(reembDeudaEf)}`:""}${devEfectivo>0?` − devoluciones ef. ${fmt(devEfectivo)}`:""}${descEfDesde>0?` + descuentos ef. ${fmt(descEfDesde)}`:""}${movNetoCaja!==0?` ${movNetoCaja>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoCaja))}`:""}`},
                     {l:"Mercado Pago",esp:esperadoMP,     real:realMP,     diff:diffMP,
-                      det:`Arranque ${fmt(arranqueMP)} + ventas MP ${fmt(vMP)}${cobDeudaMP>0?` + cobros deuda MP ${fmt(cobDeudaMP)}`:""}${gMPtot>0?` − gastos MP ${fmt(gMPtot)}`:""}${reembDeudaMP>0?` − reembolsos MP ${fmt(reembDeudaMP)}`:""}${devMP>0?` − devoluciones MP ${fmt(devMP)}`:""}${movNetoMP!==0?` ${movNetoMP>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoMP))}`:""}`},
+                      det:`Arranque ${fmt(arranqueMP)} + ventas MP ${fmt(vMP)}${cobDeudaMP>0?` + cobros deuda MP ${fmt(cobDeudaMP)}`:""}${gMPtot>0?` − gastos MP ${fmt(gMPtot)}`:""}${reembDeudaMP>0?` − reembolsos MP ${fmt(reembDeudaMP)}`:""}${devMP>0?` − devoluciones MP ${fmt(devMP)}`:""}${descMPDesde>0?` + descuentos MP ${fmt(descMPDesde)}`:""}${movNetoMP!==0?` ${movNetoMP>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoMP))}`:""}`},
                     {l:"Banco",       esp:esperadoBanco,  real:realBanco,  diff:diffBanco,
-                      det:`Arranque ${fmt(arranqueBanco)} + ventas banco ${fmt(vBanco)}${cobDeudaBanco>0?` + cobros deuda banco ${fmt(cobDeudaBanco)}`:""}${gBancoTot>0?` − gastos banco ${fmt(gBancoTot)}`:""}${reembDeudaBanco>0?` − reembolsos banco ${fmt(reembDeudaBanco)}`:""}${devBanco>0?` − devoluciones banco ${fmt(devBanco)}`:""}${movNetoBanco!==0?` ${movNetoBanco>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoBanco))}`:""}`},
+                      det:`Arranque ${fmt(arranqueBanco)} + ventas banco ${fmt(vBanco)}${cobDeudaBanco>0?` + cobros deuda banco ${fmt(cobDeudaBanco)}`:""}${gBancoTot>0?` − gastos banco ${fmt(gBancoTot)}`:""}${reembDeudaBanco>0?` − reembolsos banco ${fmt(reembDeudaBanco)}`:""}${devBanco>0?` − devoluciones banco ${fmt(devBanco)}`:""}${descBancoDesde>0?` + descuentos banco ${fmt(descBancoDesde)}`:""}${movNetoBanco!==0?` ${movNetoBanco>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoBanco))}`:""}`},
                     {l:"Ahorro",      esp:esperadoAhorro, real:realAhorro, diff:diffAhorro,
                       det:`Arranque ${fmt(arranqueAhorro)}${movNetoAhorro!==0?` ${movNetoAhorro>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoAhorro))}`:" + traspasos entre bolsillos (sin movimientos)"}`},
                   ].map(x=>(
