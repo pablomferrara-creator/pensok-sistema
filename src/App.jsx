@@ -6422,7 +6422,7 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
     )}
   </>);
 }
-function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,onRegistrarLote,vendedores,proveedores,onEditar,onEliminar}){
+function ModuloAbastecimiento({productos,abastecimiento,egresos=[],tareas=[],onRegistrar,onRegistrarLote,vendedores,proveedores,onEditar,onEliminar}){
   const [vista,setV]=useState("historial");
   const [prodBusq,setPB]=useState("");
   const [items,setItems]=useState([]); // {productoId,nombre,cantidad,costoUnit}
@@ -6477,16 +6477,32 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],onRegistrar,o
     setPB("");
   }
 
+  // Egresos cuya tarea de recordatorio ("Cargar en Abastecimiento") ya se tildó como hecha --
+  // esos ya no tienen que seguir apareciendo en el desplegable de abajo. Se matchea por texto
+  // ("Egreso #<id>:" al principio de la descripción, mismo patrón que usa esa tarea al crearse),
+  // no por si ya hay algún abastecimiento vinculado -- una compra puede traer varios productos
+  // cargados en momentos distintos, así que "ya tiene UNO vinculado" no significa "ya está
+  // completa". Filtra también por local porque `tareas` es una tabla compartida entre los dos.
+  const idsCompraResueltos = useMemo(()=>{
+    const s = new Set();
+    (tareas||[]).forEach(t=>{
+      if(t.proyecto!=="Abastecimiento pendiente"||t.estado!=="hecha"||t.local!==localKey) return;
+      const m = /^Egreso #(\d+):/.exec(t.descripcion||"");
+      if(m) s.add(Number(m[1]));
+    });
+    return s;
+  },[tareas]);
+
   // Compras de productos pendientes de cargar, para el desplegable "a qué compra corresponde".
   // Prioriza las del mismo proveedor elegido, pero muestra todas las recientes por si acaso.
   const comprasPendientes = useMemo(()=>{
-    const candidatas = egresos.filter(e=>e.es_compra_productos);
+    const candidatas = egresos.filter(e=>e.es_compra_productos&&!idsCompraResueltos.has(e.id));
     const delProveedor = proveedor ? candidatas.filter(e=>e.proveedor===proveedor) : [];
     const resto = candidatas.filter(e=>!delProveedor.includes(e));
     return [...delProveedor,...resto]
       .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))
       .slice(0,25);
-  },[egresos,proveedor]);
+  },[egresos,proveedor,idsCompraResueltos]);
 
   async function registrar(){
     if(!valido)return;setLoading(true);
@@ -9415,7 +9431,7 @@ export default function App(){
               {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} deudaAPilar={data.deudaAPilar} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
-              {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
+              {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} tareas={data.tareas} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
               {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} descuentosEgreso={data.descuentosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
