@@ -4479,6 +4479,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                           <span>·</span>
                           <span>{p.metodo_pago}</span>
                           {p.notas&&<><span>·</span><span style={{fontStyle:"italic"}}>{p.notas}</span></>}
+                          {esAdmin&&<button onClick={()=>{setModalPagos(e);abrirEditarPago(p);}} style={{background:"none",border:"none",color:G.textoSec,cursor:"pointer",fontSize:11,padding:"0 2px",lineHeight:1}} title="Editar este pago">✏️</button>}
                           {esAdmin&&<button onClick={()=>onEliminarPago&&onEliminarPago(p.id)} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:12,padding:"0 2px",lineHeight:1}} title="Eliminar este pago">✕</button>}
                         </div>
                       ))}
