@@ -63,6 +63,12 @@ const LI = LOCALES_INFO[localKey] || LOCALES_INFO.pilar;
 // ============================================================
 // VENDEDORES ahora se cargan desde Supabase (tabla vendedores)
 const METODOS_PAGO = ["Efectivo", "Transferencia MP", "Transferencia Banco", "Debito MP", "Debito Banco", "Credito MP", "Credito Banco", "Credito Cuotas Banco", "Cuenta corriente"];
+// Agrupación de métodos de pago en las 3 billeteras físicas que usa Cierre de Caja. Mismos
+// grupos que MP_METODOS/BANCO_METODOS locales de ModuloCaja (no se unificaron para no tocar
+// ese componente, que es zona frágil) -- si se agrega un método nuevo, actualizar en los dos lados.
+const MP_METODOS_BILL    = ["Transferencia MP","Debito MP","Credito MP"];
+const BANCO_METODOS_BILL = ["Transferencia Banco","Debito Banco","Credito Banco","Credito Cuotas Banco"];
+const billeteraDeMetodo = (m) => m==="Efectivo" ? "caja_chica" : MP_METODOS_BILL.includes(m) ? "mp" : BANCO_METODOS_BILL.includes(m) ? "banco" : null;
 const MODALIDADES  = ["En el local", "Telefonica / Delivery"];
 const CATEGORIAS   = ["Accesorios","Acido","Atermico","Bombas","Cloro","Envases","Filtros","Fumigacion","General","Granel","Jardinería","Limpieza","Perfumería","Pintura","PVC","Quimicos","Repuestos","Revestimiento","Sanitarios"];
 const TIPOS_EGRESO = ["Gasto fijo", "Gasto variable", "Retiro de capital", "Inversión inicial"];
@@ -4119,6 +4125,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   const [filtroT,setFT]=useState("Todos");
   const [filtroP,setFP]=useState("Todos");
   const [filtroF,setFF]=useState("");
+  const [filtroBill,setFBill]=useState("Todos");
   const [modal,setModal]=useState(false);
   const [modalEdit,setModalEdit]=useState(false);
   const [editandoEg,setEditandoEg]=useState(null);
@@ -4182,12 +4189,19 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
     if(filtroT!=="Todos"&&e.tipo!==filtroT)return false;
     if(filtroP!=="Todos"&&e.pagador!==filtroP)return false;
     if(filtroF&&e.fecha!==filtroF)return false;
+    if(filtroBill!=="Todos"){
+      // "Billetera del egreso" = de dónde salió realmente la plata, según cada pago registrado
+      // en pagos_egreso (un egreso puede pagarse en partes con métodos distintos). Un egreso sin
+      // ningún pago todavía no toca ninguna billetera, así que no matchea ningún filtro puntual.
+      const tocaBilletera = pagosEgreso.some(p=>p.egreso_id===e.id&&billeteraDeMetodo(p.metodo_pago)===filtroBill);
+      if(!tocaBilletera) return false;
+    }
     if(busqEg.trim()){
       const q=busqEg.toLowerCase();
       if(!((e.concepto||"").toLowerCase().includes(q)||(e.pagador||"").toLowerCase().includes(q)||(e.proveedor||"").toLowerCase().includes(q)||(e.tipo||"").toLowerCase().includes(q)||(e.notas||"").toLowerCase().includes(q)))return false;
     }
     return true;
-  }),[egresos,filtroReemb,filtroT,filtroP,filtroF,busqEg]);
+  }),[egresos,pagosEgreso,filtroReemb,filtroT,filtroP,filtroF,filtroBill,busqEg]);
   const totalF=filtrados.reduce((s,e)=>s+(e.monto||0),0);
   const pendReem=egresos.filter(e=>e.reembolso_pendiente&&!e.reembolsado);
   // Usar saldo_pendiente si existe, sino monto - monto_reembolsado
@@ -4377,7 +4391,8 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
           <div style={{flex:1,minWidth:130}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Pagador</div><Fi value={filtroP} onChange={setFP} options={["Todos","Pensok",...(vendedores||[]).map(v=>v.nombre)]}/></div>
           <div style={{flex:1,minWidth:130}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Fecha</div><Fi value={filtroF} onChange={setFF} type="date"/></div>
           <div style={{flex:1,minWidth:190}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Estado</div><Fi value={filtroReemb?"pendientes":"todos"} onChange={v=>setFiltroReemb(v==="pendientes")} options={[{value:"todos",label:"Todos"},{value:"pendientes",label:"Reembolsos pendientes de pago"}]}/></div>
-          {(filtroF||busqEg||filtroT!=="Todos"||filtroP!=="Todos")&&<Btn small variant="ghost" onClick={()=>{setFF("");setBusqEg("");setFT("Todos");setFP("Todos");}}>Limpiar</Btn>}
+          <div style={{flex:1,minWidth:150}}><div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Billetera</div><Fi value={filtroBill} onChange={setFBill} options={[{value:"Todos",label:"Todas"},{value:"caja_chica",label:"Caja Chica (Efectivo)"},{value:"mp",label:"Mercado Pago"},{value:"banco",label:"Banco"}]}/></div>
+          {(filtroF||busqEg||filtroT!=="Todos"||filtroP!=="Todos"||filtroBill!=="Todos")&&<Btn small variant="ghost" onClick={()=>{setFF("");setBusqEg("");setFT("Todos");setFP("Todos");setFBill("Todos");}}>Limpiar</Btn>}
           <Btn onClick={()=>setModal(true)}>+ Nuevo egreso</Btn>
         </div>
       </Card>
