@@ -862,6 +862,33 @@ function useData(toast){
     toast.ok("Pago eliminado");await cargar();
   }
 
+  // Corrige un pago ya cargado (ej. se olvidaron de poner la comisión al registrarlo) sin
+  // tener que borrarlo y volver a cargarlo. Igual que registrarPagoEgreso, la comisión NO
+  // entra en el cálculo de saldo -- solo pago.monto cuenta para saldar la deuda con el proveedor.
+  async function editarPagoEgreso(pagoId, datos){
+    const pago = pagosEgreso.find(p=>p.id===pagoId);
+    if(!pago){toast.err("Pago no encontrado");return;}
+    const{error}=await supabase.from("pagos_egreso").update(datos).eq("id",pagoId);
+    if(error){toast.err("Error al editar el pago: "+error.message);return;}
+    // Si cambió el monto del pago, recalcular el saldo del egreso (los demás pagos + este, actualizado)
+    const nuevoMonto = datos.monto!==undefined ? datos.monto : pago.monto;
+    if(nuevoMonto!==pago.monto){
+      const egreso = egresos.find(e=>e.id===pago.egreso_id);
+      if(egreso){
+        const otrosPagos = pagosEgreso.filter(p=>p.egreso_id===pago.egreso_id&&p.id!==pagoId).reduce((s,p)=>s+(p.monto||0),0);
+        const nuevoTotal = otrosPagos + (nuevoMonto||0);
+        const nuevoSaldo = Math.max(0,(egreso.monto||0)-nuevoTotal);
+        await supabase.from("egresos").update({
+          monto_reembolsado: nuevoTotal,
+          saldo_pendiente: nuevoSaldo,
+          reembolsado: nuevoSaldo===0,
+          reembolso_pendiente: nuevoSaldo>0,
+        }).eq("id",pago.egreso_id);
+      }
+    }
+    toast.ok("Pago actualizado");await cargar();
+  }
+
   // Descuento que un proveedor devuelve en plata real, días después de haber pagado un
   // egreso completo -- no toca el egreso ni el pago original, queda como evento propio
   // con su fecha/monto/método reales para que el Libro de Movimientos sume bien.
@@ -1863,7 +1890,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,editarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
 }
 
 // ============================================================
@@ -4121,7 +4148,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   </>);
 }
 
-function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],deudaAPilar=0,onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onRegistrarDescuento,onEliminarDescuento}){
+function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgreso=[],deudaAPilar=0,onRegistrar,onReembolsar,vendedores,proveedores,onEditar,onEliminar,esAdmin=true,filtroInicial="",onConsumirFiltro,onRegistrarPago,onEliminarPago,onEditarPago,onRegistrarDescuento,onEliminarDescuento}){
   const [filtroT,setFT]=useState("Todos");
   const [filtroP,setFP]=useState("Todos");
   const [filtroF,setFF]=useState("");
@@ -4171,7 +4198,20 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   const [nuevoPagoNotas, setNuevoPagoNotas]=useState("");
   const [nuevoPagoComision, setNuevoPagoComision]=useState("");
   const [guardandoPago, setGuardandoPago]=useState(false);
+  const [editandoPago, setEditandoPago]=useState(null); // pago que se está corrigiendo (no uno nuevo)
   const METODOS_CON_COMISION_EG = ["Transferencia MP","Transferencia Banco","Debito MP","Debito Banco","Credito MP","Credito Banco","Credito Cuotas Banco"];
+  function abrirEditarPago(p){
+    setEditandoPago(p);
+    setNuevoPagoMonto(String(p.monto??""));
+    setNuevoPagoFecha(p.fecha||hoy());
+    setNuevoPagoMetodo(p.metodo_pago||METODOS_PAGO[0]);
+    setNuevoPagoNotas(p.notas||"");
+    setNuevoPagoComision(p.comision_plataforma?String(p.comision_plataforma):"");
+  }
+  function cancelarEdicionPago(){
+    setEditandoPago(null);
+    setNuevoPagoMonto("");setNuevoPagoNotas("");setNuevoPagoFecha(hoy());setNuevoPagoComision("");setNuevoPagoMetodo("");
+  }
   const [nuevoDescFecha,setNuevoDescFecha]=useState(hoy());
   const [nuevoDescMonto,setNuevoDescMonto]=useState("");
   const [nuevoDescMetodo,setNuevoDescMetodo]=useState(METODOS_PAGO[0]);
@@ -4517,8 +4557,8 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
       )}
 
       {modalPagos&&(
-        <Modal title={`Pagos — ${modalPagos.concepto}`} onClose={()=>setModalPagos(null)} maxWidth={520}
-          footer={<Btn variant="secondary" onClick={()=>setModalPagos(null)}>Cerrar</Btn>}>
+        <Modal title={`Pagos — ${modalPagos.concepto}`} onClose={()=>{setModalPagos(null);cancelarEdicionPago();}} maxWidth={520}
+          footer={<Btn variant="secondary" onClick={()=>{setModalPagos(null);cancelarEdicionPago();}}>Cerrar</Btn>}>
           <div style={{display:"flex",flexDirection:"column",gap:16}}>
             {/* Resumen del egreso */}
             <div style={{background:G.sup2,borderRadius:8,padding:"12px 14px",display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
@@ -4555,7 +4595,10 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                         <div style={{fontSize:13,fontWeight:600,color:G.verde,fontFamily:"DM Mono,monospace"}}>{fmt(p.monto)}{(p.comision_plataforma||0)>0&&<span style={{color:G.rojo,fontWeight:500}}> +{fmt(p.comision_plataforma)} comisión</span>}</div>
                         <div style={{fontSize:11,color:G.textoSec}}>{p.fecha} · {p.metodo_pago}{p.notas?` · ${p.notas}`:""}</div>
                       </div>
-                      {esAdmin&&<button onClick={async()=>{await onEliminarPago(p.id);}} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}}>✕</button>}
+                      {esAdmin&&<div style={{display:"flex",gap:6}}>
+                        <button onClick={()=>abrirEditarPago(p)} style={{background:"none",border:"none",color:G.textoSec,cursor:"pointer",fontSize:12,padding:4}} title="Editar este pago">✏️</button>
+                        <button onClick={async()=>{await onEliminarPago(p.id);}} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}} title="Eliminar este pago">✕</button>
+                      </div>}
                     </div>
                   ))}
                 </div>
@@ -4566,10 +4609,13 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
               </div>
             )}
 
-            {/* Nuevo pago */}
-            {(modalPagos.reembolso_pendiente||!modalPagos.reembolsado)&&(
+            {/* Nuevo pago / Editar pago existente */}
+            {(modalPagos.reembolso_pendiente||!modalPagos.reembolsado||editandoPago)&&(
               <div style={{borderTop:`1px solid ${G.borde}`,paddingTop:14}}>
-                <div style={{fontSize:11,fontWeight:600,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Registrar nuevo pago</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:600,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>{editandoPago?"Editar pago":"Registrar nuevo pago"}</div>
+                  {editandoPago&&<button onClick={cancelarEdicionPago} style={{background:"none",border:"none",color:G.textoSec,cursor:"pointer",fontSize:11,textDecoration:"underline"}}>Cancelar edición</button>}
+                </div>
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                     <Fi label="Monto ($)" value={nuevoPagoMonto} onChange={setNuevoPagoMonto} type="number" placeholder="0"/>
@@ -4585,24 +4631,38 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                   <Fi label="Notas (opcional)" value={nuevoPagoNotas} onChange={setNuevoPagoNotas} placeholder="Ej: primera cuota"/>
                   <Btn full disabled={!nuevoPagoMonto||parseFloat(nuevoPagoMonto)<=0||guardandoPago} onClick={async()=>{
                     setGuardandoPago(true);
-                    await onRegistrarPago(modalPagos.id,{
+                    const datos={
                       fecha:nuevoPagoFecha,
                       monto:parseFloat(nuevoPagoMonto),
                       metodo_pago:nuevoPagoMetodo,
                       notas:nuevoPagoNotas,
                       comision_plataforma:parseFloat(nuevoPagoComision)||0,
-                    });
-                    // Refrescar el egreso local para que el modal muestre el saldo actualizado
-                    setModalPagos(prev=>prev?{...prev,
-                      monto_reembolsado:(prev.monto_reembolsado||0)+parseFloat(nuevoPagoMonto),
-                      saldo_pendiente:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-parseFloat(nuevoPagoMonto)),
-                      reembolso_pendiente:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-parseFloat(nuevoPagoMonto))>0,
-                      reembolsado:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-parseFloat(nuevoPagoMonto))===0,
-                    }:null);
-                    setNuevoPagoMonto("");setNuevoPagoNotas("");setNuevoPagoFecha(hoy());setNuevoPagoComision("");
+                    };
+                    if(editandoPago){
+                      const diff = datos.monto-(editandoPago.monto||0);
+                      await onEditarPago(editandoPago.id,datos);
+                      // Refrescar el egreso local con la diferencia de monto (si cambió al editar)
+                      setModalPagos(prev=>prev?{...prev,
+                        monto_reembolsado:(prev.monto_reembolsado||0)+diff,
+                        saldo_pendiente:Math.max(0,(prev.saldo_pendiente||0)-diff),
+                        reembolso_pendiente:Math.max(0,(prev.saldo_pendiente||0)-diff)>0,
+                        reembolsado:Math.max(0,(prev.saldo_pendiente||0)-diff)===0,
+                      }:null);
+                      cancelarEdicionPago();
+                    } else {
+                      await onRegistrarPago(modalPagos.id,datos);
+                      // Refrescar el egreso local para que el modal muestre el saldo actualizado
+                      setModalPagos(prev=>prev?{...prev,
+                        monto_reembolsado:(prev.monto_reembolsado||0)+datos.monto,
+                        saldo_pendiente:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-datos.monto),
+                        reembolso_pendiente:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-datos.monto)>0,
+                        reembolsado:Math.max(0,(prev.saldo_pendiente||prev.monto||0)-datos.monto)===0,
+                      }:null);
+                      setNuevoPagoMonto("");setNuevoPagoNotas("");setNuevoPagoFecha(hoy());setNuevoPagoComision("");
+                    }
                     setGuardandoPago(false);
                   }}>
-                    {guardandoPago?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:"✓ Registrar pago"}
+                    {guardandoPago?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:(editandoPago?"✓ Guardar cambios":"✓ Registrar pago")}
                   </Btn>
                 </div>
               </div>
@@ -9455,7 +9515,7 @@ export default function App(){
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="ingresos"       && <ModuloIngresos       ventas={data.ventasConItems} vendedores={data.vendedores} productos={data.productos} clientes={data.clientes} onEditar={data.editarVenta} onEliminar={data.eliminarVenta} onEditarPago={data.editarPagoDeuda} onEliminarPago={data.eliminarPagoDeuda} totalVentas={data.totalVentas} filtroInicial={filtroIngresos} filtrosPersistentes={ingFiltros} onFiltrosChange={setIngFiltros} devoluciones={data.devoluciones} onDevolver={data.registrarDevolucion} esAdmin={esAdmin}/>}
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
-              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} deudaAPilar={data.deudaAPilar} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
+              {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} deudaAPilar={data.deudaAPilar} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onEditarPago={data.editarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} tareas={data.tareas} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
