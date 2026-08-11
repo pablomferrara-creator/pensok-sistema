@@ -4455,13 +4455,13 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
               </div>
               <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
                 <div style={{fontSize:18,fontWeight:700,color:G.rojo,fontFamily:"'DM Mono',monospace"}}>{fmt(e.monto)}</div>
-                {esAdmin&&(e.reembolso_pendiente&&!e.reembolsado)&&<Btn small variant="outline" onClick={()=>{
+                {esAdmin&&<Btn small variant="outline" onClick={()=>{
                   setModalPagos(e);
                   setNuevoPagoMonto(String(e.saldo_pendiente||e.monto||""));
                   setNuevoPagoMetodo(e.metodo_pago||METODOS_PAGO[0]);
                   setNuevoPagoFecha(hoy());
                   setNuevoPagoNotas("");
-                }}>+ Registrar pago</Btn>}
+                }}>{(e.reembolso_pendiente&&!e.reembolsado)?"+ Registrar pago":"💸 Pagos / Descuento"}</Btn>}
                 <div style={{display:"flex",gap:6}}>
                   {esAdmin&&<Btn small variant="ghost" onClick={()=>abrirEditarEgreso(e)}>Editar</Btn>}
                   {esAdmin&&<Btn small variant="danger" onClick={()=>setConfirmarElimEg(e)}>Eliminar</Btn>}
