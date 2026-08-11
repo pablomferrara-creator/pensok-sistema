@@ -4691,18 +4691,19 @@ function ModuloClientes({clientes,onGuardar,ventas}){
   const [editando,setEditando]=useState(null);
   const [confirmarElimCli,setConfirmarElimCli]=useState(null);
   const [fNombre,setFN]=useState(""); const [fTipo,setFTipo]=useState("minorista");
+  const [fCuit,setFCuit]=useState("");
   const [fTel,setFTel]=useState(""); const [fEmail,setFEmail]=useState("");
   const [fDir,setFDir]=useState(""); const [fLimite,setFLim]=useState("0");
   const [fNotas,setFNotas]=useState(""); const [loading,setLoading]=useState(false);
   const [fechaDesde,setFechaDesde]=useState(""); const [fechaHasta,setFechaHasta]=useState("");
   const [orden,setOrden]=useState("nombre"); // nombre | monto | compras
 
-  function abrirNuevo(){setEditando(null);setFN("");setFTipo("minorista");setFTel("");setFEmail("");setFDir("");setFLim("0");setFNotas("");setModal(true);}
-  function abrirEditar(c){setEditando(c);setFN(c.nombre);setFTipo(c.tipo);setFTel(c.telefono||"");setFEmail(c.email||"");setFDir(c.direccion||"");setFLim(String(c.limite_cuenta||0));setFNotas(c.notas||"");setModal(true);}
+  function abrirNuevo(){setEditando(null);setFN("");setFTipo("minorista");setFCuit("");setFTel("");setFEmail("");setFDir("");setFLim("0");setFNotas("");setModal(true);}
+  function abrirEditar(c){setEditando(c);setFN(c.nombre);setFTipo(c.tipo);setFCuit(c.cuit||"");setFTel(c.telefono||"");setFEmail(c.email||"");setFDir(c.direccion||"");setFLim(String(c.limite_cuenta||0));setFNotas(c.notas||"");setModal(true);}
 
   async function guardar(){
     if(!fNombre)return;setLoading(true);
-    const datos={nombre:fNombre,tipo:fTipo,telefono:fTel,email:fEmail,direccion:fDir,limite_cuenta:parseFloat(fLimite)||0,notas:fNotas};
+    const datos={nombre:fNombre,tipo:fTipo,cuit:fCuit||null,telefono:fTel,email:fEmail,direccion:fDir,limite_cuenta:parseFloat(fLimite)||0,notas:fNotas};
     await onGuardar(datos,editando?.id||null);
     setLoading(false);setModal(false);
   }
@@ -4799,6 +4800,7 @@ function ModuloClientes({clientes,onGuardar,ventas}){
     doc.setTextColor(...gris);
     if(clienteSelec.telefono) doc.text('Tel: '+clienteSelec.telefono,14,y);
     if(clienteSelec.email) doc.text('Email: '+clienteSelec.email,14+60,y);
+    if(clienteSelec.cuit){ y+=5; doc.text('CUIT: '+clienteSelec.cuit,14,y); }
     y+=4;
     doc.setDrawColor(220,220,220);
     doc.setLineWidth(0.3);
@@ -4946,6 +4948,7 @@ function ModuloClientes({clientes,onGuardar,ventas}){
             </div>
             <Div/>
             <div style={{display:"flex",flexDirection:"column",gap:8,fontSize:13}}>
+              {clienteSelec.cuit&&<div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>CUIT</span><span style={{fontFamily:"'DM Mono',monospace"}}>{clienteSelec.cuit}</span></div>}
               {clienteSelec.telefono&&<div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Telefono</span><span>{clienteSelec.telefono}</span></div>}
               {clienteSelec.email&&<div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:G.textoSec}}>Email</span><span style={{fontSize:12}}>{clienteSelec.email}</span></div>}
               {clienteSelec.direccion&&<div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{color:G.textoSec,flexShrink:0}}>Direccion</span><span style={{textAlign:"right",fontSize:12}}>{clienteSelec.direccion}</span></div>}
@@ -4996,7 +4999,10 @@ function ModuloClientes({clientes,onGuardar,ventas}){
         <Modal title={editando?"Editar cliente":"Nuevo cliente"} onClose={()=>setModal(false)}
           footer={<><Btn variant="secondary" onClick={()=>setModal(false)}>Cancelar</Btn><Btn disabled={!fNombre||loading} onClick={guardar}>{loading?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Guardando</span>:"Guardar cliente"}</Btn></>}>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
-            <Fi label="Nombre / razon social" value={fNombre} onChange={setFN} placeholder="Ej: Club Nautico Pilar"/>
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
+              <Fi label="Nombre / razon social" value={fNombre} onChange={setFN} placeholder="Ej: Club Nautico Pilar"/>
+              <Fi label="CUIT" value={fCuit} onChange={setFCuit} placeholder="20-12345678-9"/>
+            </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <Fi label="Tipo de precio"  value={fTipo}  onChange={setFTipo}  options={["minorista","especial","mayorista","costo"]}/>
               <Fi label="Telefono"        value={fTel}   onChange={setFTel}   placeholder="0230-444-0000"/>
