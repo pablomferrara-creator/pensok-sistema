@@ -150,6 +150,15 @@ ya estaba hecho así. Impacto real medido en Pilar al momento del fix: **203 pro
 con `stock_min` en 0, de los cuales 140 ya estaban en 0 de stock** — todos esos 140 dejaron de
 contarse como alerta. `stock<0` (negativo) se sigue marcando igual sin importar `stock_min` — es
 un problema de datos aparte (vendido antes de abastecer), no un aviso de "andá a comprar más".
+- **Filtro "Stock mínimo" en la tabla de Productos** (mismo día): dropdown nuevo al lado de
+  "Estado" — "Con mínimo" / "Sin mínimo (0)" / "Todos" — para poder auditar rápido a cuáles
+  productos les falta setear el mínimo, ya que ahora un mínimo en 0 significa "no avisar nunca"
+  (ver punto de arriba) y por eso importa saber cuáles quedaron así sin querer vs. a propósito.
+- **No existe (todavía) un campo de "stock deseado"** — solo `stock` (actual) y `stock_min`
+  (umbral de alerta). Pablo preguntó dónde se carga porque lo usa para calcular cuánto comprar;
+  hoy no hay ningún lugar para eso, es un campo nuevo a agregar si se pide explícitamente (no se
+  agregó de entrada porque cambia el modelo de datos — hay que definir junto con Pablo qué
+  significa exactamente y dónde se usa antes de tocar el schema).
 
 ## Control de Stock (conteo físico + ajuste)
 

@@ -5225,6 +5225,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   const [busqueda,  setB]       = useState("");
   const [filtroC,   setFC]      = useState("Todas");
   const [filtroE,   setFE]      = useState("Todos");
+  const [filtroMin, setFMin]    = useState("Todos");
   const [filtroProv,setFPr]     = useState("Todos");
   const [filtroMarca,setFMarca] = useState("Todas");
   const [sortCol,   setSortCol] = useState("nombre");
@@ -5555,6 +5556,8 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       if(filtroE==="Bajo stock"&&estadoStock(p)!=="bajo")return false;
       if(filtroE==="Agotados"&&estadoStock(p)!=="agotado")return false;
       if(filtroE==="Inactivos"&&p.activo)return false;
+      if(filtroMin==="Con mínimo"&&(p.stock_min||0)===0)return false;
+      if(filtroMin==="Sin mínimo (0)"&&(p.stock_min||0)!==0)return false;
       if(filtroProv!=="Todos"&&(p.proveedor||"")!==filtroProv)return false;
       if(filtroMarca!=="Todas"&&(p.marca||"")!==filtroMarca)return false;
       if(busqueda){
@@ -5575,7 +5578,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       return sortDir==="asc"?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va));
     });
     return list;
-  },[productos,busqueda,filtroC,filtroE,filtroProv,filtroMarca,sortCol,sortDir]);
+  },[productos,busqueda,filtroC,filtroE,filtroMin,filtroProv,filtroMarca,sortCol,sortDir]);
 
   function toggleSort(col){
     if(sortCol===col)setSortDir(d=>d==="asc"?"desc":"asc");
@@ -5819,9 +5822,13 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             <div style={{fontSize:11,color:G.textoSec,fontWeight:600,marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Estado</div>
             <Fi value={filtroE}     onChange={setFE}     options={["Todos","OK","Bajo stock","Agotados","Inactivos"]}/>
           </div>
+          <div style={{flex:"1 1 140px"}}>
+            <div style={{fontSize:11,color:G.textoSec,fontWeight:600,marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Stock mínimo</div>
+            <Fi value={filtroMin}   onChange={setFMin}   options={["Todos","Con mínimo","Sin mínimo (0)"]}/>
+          </div>
           <div style={{paddingBottom:1,display:"flex",gap:8,flexWrap:"wrap"}}>
-            {(busqueda||filtroC!=="Todas"||filtroProv!=="Todos"||filtroMarca!=="Todas"||filtroE!=="Todos")&&(
-              <Btn variant="ghost" small onClick={()=>{setB("");setFC("Todas");setFPr("Todos");setFMarca("Todas");setFE("Todos");}}>✕ Limpiar filtros</Btn>
+            {(busqueda||filtroC!=="Todas"||filtroProv!=="Todos"||filtroMarca!=="Todas"||filtroE!=="Todos"||filtroMin!=="Todos")&&(
+              <Btn variant="ghost" small onClick={()=>{setB("");setFC("Todas");setFPr("Todos");setFMarca("Todas");setFE("Todos");setFMin("Todos");}}>✕ Limpiar filtros</Btn>
             )}
             <Btn variant="secondary" onClick={()=>setModalLista(true)}>📄 Lista de precios</Btn>
             {esAdmin&&localKey==="pilar"&&<Btn variant="secondary" disabled={sincronizando} onClick={sincronizarConCamanio}>{sincronizando?"Sincronizando...":"🔄 Sincronizar con Caamaño"}</Btn>}
