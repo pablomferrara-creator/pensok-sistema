@@ -87,7 +87,10 @@ const mesAct = () => new Date().toISOString().slice(0,7);
 
 function precioARS(v,m)   { return m==="USD"?v*USD_RATE:v; }
 function getPrecio(p,tipo) { return tipo==="mayorista"?p.precio_may:tipo==="especial"?p.precio_esp:tipo==="costo"?p.costo:p.precio_min; }
-function estadoStock(p)    { if(p.stock<0)return"negativo"; if(p.stock===0)return"agotado"; if(p.stock<=(p.stock_min||0))return"bajo"; return"ok"; }
+// Stock mínimo en 0 = "no quiero que este producto pida reposición nunca" (a propósito, pedido
+// de Pablo el 2026-08-11) -- ni por bajo stock ni por agotado. Stock negativo se sigue marcando
+// igual (es un problema de datos aparte, no un aviso de "andá a comprar más").
+function estadoStock(p)    { if(p.stock<0)return"negativo"; if((p.stock_min||0)===0)return"ok"; if(p.stock===0)return"agotado"; if(p.stock<=p.stock_min)return"bajo"; return"ok"; }
 function iniciales(n)      { return n.split(" ").slice(0,2).map(w=>w[0]).join("").toUpperCase(); }
 
 function calcTotalItems(items,desc=0){
@@ -5524,7 +5527,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   }
 
   const alertas=productos
-    .filter(p=>p.activo && estadoStock(p)!=="ok" && (p.stock_min||0)>0)
+    .filter(p=>p.activo && estadoStock(p)!=="ok") // estadoStock ya excluye stock_min=0
     .sort((a,b)=>{
       // Agotados primero, luego bajo stock
       const ea=estadoStock(a)==="agotado"?0:1;

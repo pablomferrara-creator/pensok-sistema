@@ -136,6 +136,21 @@ cero (`pendienteAbastecer>0`) para no ensuciar el dashboard cuando no hay nada a
 visibilidad de cuánta plata está "comprometida" en compras que todavía no se cargaron, sin que
 afecte el número de valor de stock real.
 
+## Stock mínimo en 0 = no pedir reposición nunca (2026-08-11)
+
+`estadoStock(p)` (línea ~90, usada en TODOS los lugares que deciden si un producto "necesita
+atención": badge de alertas de la pestaña Inventario, card "Stock crítico" del Dashboard, las
+métricas "Bajo stock"/"Agotados" y sus filtros en `ModuloProductos`, y los PDF de listas
+filtradas por estado) ahora devuelve `"ok"` sin importar el stock actual si `stock_min===0` —
+ni "bajo" ni "agotado". Antes esto NO era consistente: `ModuloProductos` ya lo hacía bien (tenía
+su propio filtro `&&(p.stock_min||0)>0` aparte, ahora removido porque quedó redundante), pero el
+badge de Inventario y el "Stock crítico" del Dashboard NO, así que un producto con mínimo 0 y
+stock en 0 igual aparecía ahí como "Agotado". Encontrado por Pablo el 2026-08-11 al preguntar si
+ya estaba hecho así. Impacto real medido en Pilar al momento del fix: **203 productos activos
+con `stock_min` en 0, de los cuales 140 ya estaban en 0 de stock** — todos esos 140 dejaron de
+contarse como alerta. `stock<0` (negativo) se sigue marcando igual sin importar `stock_min` — es
+un problema de datos aparte (vendido antes de abastecer), no un aviso de "andá a comprar más".
+
 ## Control de Stock (conteo físico + ajuste)
 
 Módulo que reemplazó el viejo flujo de "descargar Excel, contar a mano, resubir". Tablas nuevas por local (`conteos_stock`, `conteos_stock_items` — igual que `devoluciones`, no compartidas entre Pilar y Caamaño porque el stock es independiente).
