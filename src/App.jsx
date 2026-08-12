@@ -1558,9 +1558,12 @@ function useData(toast){
       total, markup_pct:0, estado:"pendiente",
       monto_pagado:0, saldo_pendiente:total, notas:notas||""
     };
-    // Insertar en Pilar
-    const {error} = await supabase.from("traspasos").insert(payload);
+    // Insertar en Pilar -- pedimos el id de vuelta: es la clave que a partir de ahora vincula
+    // esta fila con su espejo en Caamaño (pilar_id) y con las filas de abastecimiento que genera
+    // (traspaso_id), para poder editar/eliminar el traspaso más adelante sin adivinar por fecha.
+    const {data:tData, error} = await supabase.from("traspasos").insert(payload).select().single();
     if(error) return false;
+    const traspasoId = tData.id;
     // Descontar stock en Pilar
     for(const it of items){
       const prod = productos.find(p=>p.id===it.id);
@@ -1579,13 +1582,18 @@ function useData(toast){
           metodo_pago: "Traspaso interno",
           responsable: "Sistema",
           notas: notas||"Traspaso de mercadería a Caamaño",
+          traspaso_id: traspasoId,
         });
       }
     }catch(e){console.warn("No se pudo registrar traspaso en historial de abastecimiento Pilar:",e);}
     // Insertar en Caamaño y sumar stock allí
     if(supabaseCamanio){
       try{
-        await supabaseCamanio.from("traspasos").insert(payload);
+        // traspaso_id de abastecimiento en Caamaño tiene que ser el id PROPIO de Caamaño (el FK
+        // apunta a la tabla traspasos de Caamaño, no a la de Pilar) -- pilar_id es solo el link
+        // hacia atrás, para encontrar este espejo desde Pilar (pagos, editar, eliminar).
+        const {data:tDataCam} = await supabaseCamanio.from("traspasos").insert({...payload, pilar_id: traspasoId}).select().single();
+        const traspasoIdCam = tDataCam?.id;
         for(const it of items){
           const {data:pc}=await supabaseCamanio.from("productos").select("id,stock").eq("codigo",it.codigo).maybeSingle();
           if(pc){
@@ -1602,6 +1610,7 @@ function useData(toast){
                 metodo_pago: "Traspaso interno",
                 responsable: "Sistema",
                 notas: notas||"Traspaso de mercadería desde Pilar",
+                traspaso_id: traspasoIdCam,
               });
             }catch(e2){console.warn("No se pudo registrar traspaso en historial de abastecimiento Caamaño:",e2);}
           }
@@ -1631,13 +1640,15 @@ function useData(toast){
           reembolso_pendiente:false, reembolsado:true,
           monto_reembolsado:monto, saldo_pendiente:0, notas:notas||""
         });
-        // Actualizar saldo traspaso en Caamaño
-        // OJO: matchea por fecha nada más -- no hay ningún id compartido entre la fila de Pilar
-        // y su espejo en Caamaño. Con dos traspasos de la misma fecha, maybeSingle() no devuelve
-        // una fila única y esto se salta en silencio, dejando la copia de Caamaño con saldo
-        // viejo (bug real, encontrado el 2026-08-10, no arreglado todavía). Por eso el saldo que
-        // Caamaño le debe a Pilar se lee directo de Pilar (`deudaAPilar` más arriba), no de acá.
-        const {data:tc}=await supabaseCamanio.from("traspasos").select("id,monto_pagado,total").eq("fecha",traspaso.fecha).maybeSingle();
+        // Actualizar saldo traspaso en Caamaño. Matchea por pilar_id (arreglado el 2026-08-11 --
+        // antes matcheaba por fecha nada más, y con dos traspasos el mismo día se salteaba en
+        // silencio; ver CLAUDE.md, "registrarPagoTraspaso"). Fallback a fecha solo por si algún
+        // traspaso viejo quedó sin pilar_id backfillado.
+        let {data:tc}=await supabaseCamanio.from("traspasos").select("id,monto_pagado,total").eq("pilar_id",traspasoId).maybeSingle();
+        if(!tc){
+          const fb = await supabaseCamanio.from("traspasos").select("id,monto_pagado,total").eq("fecha",traspaso.fecha).maybeSingle();
+          tc = fb.data;
+        }
         if(tc){
           const nm=(tc.monto_pagado||0)+monto;
           const ns=Math.max(0,tc.total-nm);
@@ -1646,6 +1657,113 @@ function useData(toast){
       }catch(e){console.warn("Error registrando pago en Caamaño:",e);}
     }
     await cargarTraspasos();
+    return true;
+  }
+
+  // Busca el espejo de un traspaso de Pilar en Caamaño, por pilar_id (con fallback a fecha
+  // para algún traspaso viejo que hubiera quedado sin backfillar).
+  async function buscarEspejoCamanio(traspasoId, fecha){
+    if(!supabaseCamanio) return null;
+    let {data} = await supabaseCamanio.from("traspasos").select("*").eq("pilar_id",traspasoId).maybeSingle();
+    if(!data){
+      const fb = await supabaseCamanio.from("traspasos").select("*").eq("fecha",fecha).maybeSingle();
+      data = fb.data;
+    }
+    return data;
+  }
+
+  // Editar/eliminar traspaso: a propósito solo mientras no tiene NINGÚN pago registrado
+  // (monto_pagado===0). Con pagos de por medio, ajustar total/saldo/stock de forma consistente
+  // en las dos bases se complica mucho más -- más vale que Pablo elimine el traspaso mal cargado
+  // (sin pagos, con esta misma función) y lo vuelva a cargar bien, que es el caso real que pidió.
+  async function editarTraspaso(traspasoId, items, notas){
+    const t = traspasos.find(x=>x.id===traspasoId);
+    if(!t){toast.err("Traspaso no encontrado");return false;}
+    if((t.monto_pagado||0)>0){toast.err("No se puede editar: ya tiene un pago registrado. Eliminalo (sin pagos no se puede) y cargalo de nuevo.");return false;}
+    const itemsViejos = t.productos||[];
+    const nuevoTotal = items.reduce((s,i)=>s+(i.costo*i.cantidad),0);
+
+    // Delta neto por producto (nuevo - viejo), para no aplicar dos updates de stock separados
+    // sobre el mismo producto si solo cambió la cantidad de un ítem que ya estaba.
+    const deltaPorProducto = {};
+    itemsViejos.forEach(it=>{ deltaPorProducto[it.id] = (deltaPorProducto[it.id]||0) - it.cantidad; });
+    items.forEach(it=>{ deltaPorProducto[it.id] = (deltaPorProducto[it.id]||0) + it.cantidad; });
+    const deltas = Object.entries(deltaPorProducto).filter(([,d])=>d!==0).map(([id,delta])=>{
+      const ref = items.find(i=>i.id===Number(id)) || itemsViejos.find(i=>i.id===Number(id));
+      return {id:Number(id), delta, nombre:ref?.nombre||"", costo:ref?.costo||0, codigo:ref?.codigo||""};
+    });
+
+    // Pilar: transferir MÁS resta MÁS stock -> el stock se mueve en la dirección opuesta al delta.
+    for(const d of deltas){
+      const prod = productos.find(p=>p.id===d.id);
+      if(prod) await supabase.from("productos").update({stock:(prod.stock||0)-d.delta}).eq("id",d.id);
+      await supabase.from("abastecimiento").insert({
+        fecha: hoy(), producto_id:d.id, nombre:d.nombre, cantidad:-d.delta, costo_unit:d.costo,
+        proveedor:"Ajuste traspaso a Caamaño", metodo_pago:"Traspaso interno", responsable:"Sistema",
+        notas:`Corrección de cantidad, traspaso #${traspasoId}`, traspaso_id: traspasoId,
+      });
+    }
+    await supabase.from("traspasos").update({
+      productos: items.map(i=>({id:i.id,codigo:i.codigo,nombre:i.nombre,cantidad:i.cantidad,costo:i.costo,subtotal:i.costo*i.cantidad})),
+      total: nuevoTotal, saldo_pendiente: nuevoTotal, notas: notas??t.notas,
+    }).eq("id",traspasoId);
+
+    // Caamaño: mismo delta pero en dirección opuesta (recibe lo que Pilar manda).
+    const espejo = await buscarEspejoCamanio(traspasoId, t.fecha);
+    if(espejo){
+      try{
+        for(const d of deltas){
+          const {data:pc} = await supabaseCamanio.from("productos").select("id,stock").eq("codigo",d.codigo).maybeSingle();
+          if(pc){
+            await supabaseCamanio.from("productos").update({stock:(pc.stock||0)+d.delta}).eq("id",pc.id);
+            await supabaseCamanio.from("abastecimiento").insert({
+              fecha: hoy(), producto_id:pc.id, nombre:d.nombre, cantidad:d.delta, costo_unit:d.costo,
+              proveedor:"Ajuste traspaso desde Pilar", metodo_pago:"Traspaso interno", responsable:"Sistema",
+              notas:`Corrección de cantidad, traspaso #${traspasoId}`, traspaso_id: espejo.id,
+            });
+          }
+        }
+        await supabaseCamanio.from("traspasos").update({
+          productos: items.map(i=>({id:i.id,codigo:i.codigo,nombre:i.nombre,cantidad:i.cantidad,costo:i.costo,subtotal:i.costo*i.cantidad})),
+          total: nuevoTotal, saldo_pendiente: nuevoTotal,
+        }).eq("id",espejo.id);
+      }catch(e){console.warn("No se pudo reflejar la edición del traspaso en Caamaño:",e);}
+    }
+    toast.ok("Traspaso actualizado");
+    await cargar(); await cargarTraspasos();
+    return true;
+  }
+
+  async function eliminarTraspaso(traspasoId){
+    const t = traspasos.find(x=>x.id===traspasoId);
+    if(!t){toast.err("Traspaso no encontrado");return false;}
+    if((t.monto_pagado||0)>0){toast.err("No se puede eliminar un traspaso que ya tiene un pago registrado.");return false;}
+    const items = t.productos||[];
+
+    // Revertir stock en Pilar (devolver lo que se había restado)
+    for(const it of items){
+      const prod = productos.find(p=>p.id===it.id);
+      if(prod) await supabase.from("productos").update({stock:(prod.stock||0)+it.cantidad}).eq("id",it.id);
+    }
+    // Borrar el historial de abastecimiento que generó este traspaso en Pilar
+    await supabase.from("abastecimiento").delete().eq("traspaso_id",traspasoId);
+
+    // Revertir en Caamaño: stock, abastecimiento, y la fila espejo
+    const espejo = await buscarEspejoCamanio(traspasoId, t.fecha);
+    if(espejo){
+      try{
+        for(const it of items){
+          const {data:pc} = await supabaseCamanio.from("productos").select("id,stock").eq("codigo",it.codigo).maybeSingle();
+          if(pc) await supabaseCamanio.from("productos").update({stock:Math.max(0,(pc.stock||0)-it.cantidad)}).eq("id",pc.id);
+        }
+        await supabaseCamanio.from("abastecimiento").delete().eq("traspaso_id",espejo.id);
+        await supabaseCamanio.from("traspasos").delete().eq("id",espejo.id);
+      }catch(e){console.warn("No se pudo revertir el traspaso en Caamaño:",e);}
+    }
+    // Borrar la fila en Pilar
+    await supabase.from("traspasos").delete().eq("id",traspasoId);
+    toast.ok("Traspaso eliminado");
+    await cargar(); await cargarTraspasos();
     return true;
   }
 
@@ -1890,7 +2008,7 @@ function useData(toast){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,editarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,editarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarTraspaso,eliminarTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
 }
 
 // ============================================================
@@ -6083,11 +6201,13 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
 // ============================================================
 // MODULO: TRASPASOS
 // ============================================================
-function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,totalDeudaCamanio,localKey,toast}){
+function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,onEditar,onEliminar,totalDeudaCamanio,localKey,toast}){
   const [tab,          setTab]          = useState("historial");
   const [modalNuevo,   setModalNuevo]   = useState(false);
+  const [editando,     setEditando]     = useState(null); // traspaso que se está corrigiendo, o null si es uno nuevo
   const [modalPago,    setModalPago]    = useState(null);
   const [detalleTraspaso, setDetalleTraspaso] = useState(null);
+  const [confirmarElim, setConfirmarElim] = useState(null);
   const [busqueda,     setBusqueda]     = useState("");
   const [resultados,   setResultados]   = useState([]);
   const [items,        setItems]        = useState([]);
@@ -6243,12 +6363,33 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
 
   const totalTraspaso = items.reduce((s,i)=>s+(i.costo*i.cantidad),0);
 
+  // Editar/eliminar solo tiene sentido mientras el traspaso no tiene ningún pago registrado
+  // (ver por qué en useData/editarTraspaso) -- fuera de eso, solo se puede desde Pilar.
+  const puedeGestionar = (t) => localKey==="pilar" && !(t.monto_pagado>0);
+
+  function abrirEditarTraspaso(t){
+    setEditando(t);
+    setNotas(t.notas||"");
+    // El stock "disponible" para el input tiene que sumar de vuelta la cantidad que este mismo
+    // traspaso ya le había restado a Pilar, si no el máximo del input queda mal (parece que hay
+    // menos stock del que en realidad hay una vez que se descuenta lo nuevo).
+    setItems((t.productos||[]).map(p=>{
+      const prod = productos.find(pr=>pr.id===p.id);
+      return {id:p.id, codigo:p.codigo, nombre:p.nombre, costo:p.costo, cantidad:p.cantidad, stock:(prod?.stock||0)+p.cantidad};
+    }));
+    setModalNuevo(true);
+  }
+
+  function cerrarModalTraspaso(){
+    setModalNuevo(false); setEditando(null); setItems([]); setNotas(""); setBusqueda(""); setResultados([]);
+  }
+
   async function guardarTraspaso(){
     if(items.length===0){toast.err("Agregá al menos un producto");return;}
     setLoading(true);
-    const ok = await onRegistrar(items,notas);
-    if(ok){toast.ok("Traspaso registrado");setModalNuevo(false);setItems([]);setNotas("");}
-    else toast.err("Error al registrar traspaso");
+    const ok = editando ? await onEditar(editando.id,items,notas) : await onRegistrar(items,notas);
+    if(ok){toast.ok(editando?"Traspaso actualizado":"Traspaso registrado");cerrarModalTraspaso();}
+    else toast.err(editando?"Error al actualizar traspaso":"Error al registrar traspaso");
     setLoading(false);
   }
 
@@ -6317,9 +6458,15 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
                     </span>
                   </td>
                   <td style={{padding:"10px 14px"}} onClick={e=>e.stopPropagation()}>
-                    {localKey==="pilar"&&t.estado!=="pagado"&&(
-                      <Btn small onClick={()=>{setModalPago(t);setPagoMonto(String(t.saldo_pendiente));}}>Registrar pago</Btn>
-                    )}
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      {localKey==="pilar"&&t.estado!=="pagado"&&(
+                        <Btn small onClick={()=>{setModalPago(t);setPagoMonto(String(t.saldo_pendiente));}}>Registrar pago</Btn>
+                      )}
+                      {puedeGestionar(t)&&<>
+                        <button onClick={()=>abrirEditarTraspaso(t)} title="Editar traspaso" style={{background:"none",border:"none",color:G.textoSec,cursor:"pointer",fontSize:14,padding:4}}>✏️</button>
+                        <button onClick={()=>setConfirmarElim(t)} title="Eliminar traspaso" style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}}>✕</button>
+                      </>}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -6359,13 +6506,13 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
       )}
     </div>
 
-    {/* Modal Nuevo Traspaso */}
+    {/* Modal Nuevo Traspaso / Editar Traspaso */}
     {modalNuevo&&(
-      <Modal title="Nuevo Traspaso → Caamaño" onClose={()=>{setModalNuevo(false);setItems([]);setNotas("");}} maxWidth={680}
-        footer={<><Btn variant="secondary" onClick={()=>{setModalNuevo(false);setItems([]);setNotas("");}}>Cancelar</Btn><Btn disabled={items.length===0||loading} onClick={guardarTraspaso}>{loading?"Registrando...":"Confirmar traspaso"}</Btn></>}>
+      <Modal title={editando?`Editar traspaso #${editando.id}`:"Nuevo Traspaso → Caamaño"} onClose={cerrarModalTraspaso} maxWidth={680}
+        footer={<><Btn variant="secondary" onClick={cerrarModalTraspaso}>Cancelar</Btn><Btn disabled={items.length===0||loading} onClick={guardarTraspaso}>{loading?"Guardando...":(editando?"Guardar cambios":"Confirmar traspaso")}</Btn></>}>
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
           <div style={{fontSize:12,color:G.textoSec,background:G.sup2,borderRadius:8,padding:"8px 14px"}}>
-            El stock se descontará de Pilar y se sumará en Caamaño automáticamente. El costo es al precio de costo actual de cada producto.
+            {editando?"Corrige el stock de Pilar y Caamaño según la diferencia con lo que ya se había cargado.":"El stock se descontará de Pilar y se sumará en Caamaño automáticamente. El costo es al precio de costo actual de cada producto."}
           </div>
           {/* Buscador */}
           <div style={{position:"relative"}}>
@@ -6429,7 +6576,12 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
     )}
     {detalleTraspaso&&(
       <Modal title={`Traspaso del ${detalleTraspaso.fecha}`} onClose={()=>setDetalleTraspaso(null)} maxWidth={560}
-        footer={<div style={{display:"flex",gap:8}}><Btn variant="secondary" disabled={genRemito} onClick={()=>imprimirRemitoTraspaso(detalleTraspaso)}>{genRemito?"Generando...":"🖨 Remito PDF"}</Btn><Btn variant="secondary" onClick={()=>setDetalleTraspaso(null)}>Cerrar</Btn></div>}>
+        footer={<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn variant="secondary" disabled={genRemito} onClick={()=>imprimirRemitoTraspaso(detalleTraspaso)}>{genRemito?"Generando...":"🖨 Remito PDF"}</Btn>
+          {puedeGestionar(detalleTraspaso)&&<Btn variant="secondary" onClick={()=>{abrirEditarTraspaso(detalleTraspaso);setDetalleTraspaso(null);}}>✏️ Editar</Btn>}
+          {puedeGestionar(detalleTraspaso)&&<Btn variant="danger" onClick={()=>{setConfirmarElim(detalleTraspaso);setDetalleTraspaso(null);}}>Eliminar</Btn>}
+          <Btn variant="secondary" onClick={()=>setDetalleTraspaso(null)}>Cerrar</Btn>
+        </div>}>
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
             <div style={{flex:"1 1 100px",background:G.sup2,borderRadius:8,padding:"8px 12px"}}>
@@ -6453,6 +6605,10 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
               </div>
             </div>
           </div>
+
+          {localKey==="pilar"&&(detalleTraspaso.monto_pagado||0)>0&&(
+            <div style={{fontSize:11,color:G.textoSec,fontStyle:"italic"}}>Ya tiene un pago registrado, así que no se puede editar ni eliminar desde acá.</div>
+          )}
 
           {detalleTraspaso.notas&&(
             <div style={{background:`${G.amarillo}11`,border:`1px solid ${G.amarillo}33`,borderRadius:8,padding:"8px 12px"}}>
@@ -6496,6 +6652,15 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,t
               </table>
             </div>
           </div>
+        </div>
+      </Modal>
+    )}
+    {confirmarElim&&(
+      <Modal title="Eliminar traspaso" onClose={()=>setConfirmarElim(null)}
+        footer={<><Btn variant="secondary" onClick={()=>setConfirmarElim(null)}>Cancelar</Btn><Btn variant="danger" onClick={async()=>{const ok=await onEliminar(confirmarElim.id);if(ok)setConfirmarElim(null);}}>Sí, eliminar</Btn></>}>
+        <div style={{fontSize:14,lineHeight:1.6}}>
+          <p>¿Eliminar el traspaso del <strong>{confirmarElim.fecha}</strong> ({fmt(confirmarElim.total)}, {(confirmarElim.productos||[]).length} producto{(confirmarElim.productos||[]).length!==1?"s":""})?</p>
+          <p style={{color:G.textoSec,fontSize:12}}>El stock vuelve a Pilar y se descuenta de Caamaño automáticamente. Esta acción no se puede deshacer.</p>
         </div>
       </Modal>
     )}
@@ -9521,7 +9686,7 @@ export default function App(){
               {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} tareas={data.tareas} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
-              {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
+              {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} onEditar={data.editarTraspaso} onEliminar={data.eliminarTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
               {modulo==="caja"           && <ModuloCaja          ventas={data.ventasConItems} egresos={data.egresos} pagosEgreso={data.pagosEgreso} descuentosEgreso={data.descuentosEgreso} devoluciones={data.devoluciones} toast={toast}/>}
               {modulo==="tareas"         && <ModuloTareas         tareas={data.tareas} responsables={data.responsables} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} onGuardar={data.guardarTarea} onCambiarEstado={data.cambiarEstadoTarea} onEliminar={data.eliminarTarea} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""} filtroRespInicial={filtroTareasResp} onConsumirFiltroResp={()=>setFiltroTareasResp("")}/>}
               {modulo==="configuracion"  && <ModuloConfiguracion  vendedores={data.vendedores} onGuardar={data.guardarVendedor} onToggle={data.toggleVendedor} proveedores={data.proveedores} onGuardProv={data.guardarProveedor} onToggleProv={data.toggleProveedor} productos={data.productos} tipoCambio={data.tipoCambio} onActualizarTC={data.actualizarTipoCambio} onActualizarPct={data.actualizarPorcentaje} onActualizarCSV={data.actualizarDesdeCSV}/>}
