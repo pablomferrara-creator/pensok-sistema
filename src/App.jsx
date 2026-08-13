@@ -3551,6 +3551,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   const setFEstado = v=>{setFEstadoRaw(v); onFiltrosChange&&onFiltrosChange(p=>({...p,estado:v}));};
   const setFCliente= v=>{setFClienteRaw(v);onFiltrosChange&&onFiltrosChange(p=>({...p,cliente:v}));};
   const [confirmarElim,setConfirmarElim]=useState(null);
+  const [verNC,setVerNC]=useState(null); // venta cuyas notas de crédito se están viendo
   const [genTicket,setGenTicket]=useState(false);
   const [modalCobro,setModalCobro]=useState(null); // venta con saldo pendiente
   const [cobroMonto,setCobroMonto]=useState("");
@@ -4050,7 +4051,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
                   <Btn small variant="secondary" disabled={genTicket===v.id} onClick={e=>{e.stopPropagation();imprimirTicket(v);}}>🖨 Ticket</Btn>
                   <Btn small variant="secondary" disabled={genRemito===v.id} onClick={e=>{e.stopPropagation();imprimirRemito(v);}}>📦 Remito</Btn>
                   {esAdmin&&(v.items||[]).length>0&&<Btn small variant="ghost" onClick={e=>{e.stopPropagation();abrirDevolver(v);}}>↩ Devolver</Btn>}
-                  {(devoluciones||[]).some(d=>String(d.venta_id)===String(v.id))&&<Badge color="amarillo" small>📝 NC</Badge>}
+                  {(devoluciones||[]).some(d=>String(d.venta_id)===String(v.id))&&<span onClick={e=>{e.stopPropagation();setVerNC(v);}} style={{cursor:"pointer"}} title="Ver nota de crédito"><Badge color="amarillo" small>📝 NC</Badge></span>}
                   {!v.cobrado&&<Btn small variant="outline" onClick={e=>{e.stopPropagation();setModalCobro(v);setCobroMonto(String(v.saldo_cobro||v.total||""));setCobroMetodo("Efectivo");setCobroFecha(hoy());}}>💰 Registrar cobro</Btn>}
                   {esAdmin&&!v.cobrado&&(v.monto_cobrado||0)>0&&<Btn small variant="ghost" onClick={e=>{e.stopPropagation();setModalCorregir(v);setCorregirMonto(String(v.monto_cobrado||0));}}>✏ Corregir cobro</Btn>}
                 </div>
@@ -4172,6 +4173,41 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
               <span style={{fontSize:20,fontWeight:700,color:G.verde,fontFamily:"DM Mono,monospace"}}>{fmt(totalDev)}</span>
             </div>
             <div style={{fontSize:10,color:G.textoSec}}>Se genera una nota de crédito ligada a esta venta, se reingresa el stock marcado y {devTipo==="dinero"?"la caja registra la salida de dinero":"se acredita el saldo al cliente"}. La venta original queda registrada con su NC para consulta.</div>
+          </div>
+        </Modal>);
+      })()}
+
+      {verNC&&(()=>{
+        const notas = (devoluciones||[]).filter(d=>String(d.venta_id)===String(verNC.id)).sort((a,b)=>a.fecha>b.fecha?1:-1);
+        return(
+        <Modal title={`Notas de crédito · ${verNC.nro_factura||verNC.cliente_nombre||""}`} onClose={()=>setVerNC(null)} maxWidth={560}
+          footer={<Btn variant="secondary" onClick={()=>setVerNC(null)}>Cerrar</Btn>}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            {notas.length===0&&<div style={{color:G.textoSec,fontSize:13}}>No se encontró la nota de crédito (puede haberse eliminado).</div>}
+            {notas.map(n=>(
+              <div key={n.id} style={{background:G.sup2,borderRadius:10,padding:"12px 14px",display:"flex",flexDirection:"column",gap:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:14}}>{n.nro_nota}</div>
+                    <div style={{fontSize:12,color:G.textoSec,marginTop:2}}>{n.fecha}{n.hora?` · ${n.hora}`:""} · {n.vendedor||"—"}</div>
+                  </div>
+                  <Badge color={n.tipo==="dinero"?"rojo":"azul"}>{n.tipo==="dinero"?`💵 Devuelto (${n.metodo_devolucion||""})`:"🏦 Saldo a favor"}</Badge>
+                </div>
+                {n.motivo&&<div style={{fontSize:12,color:G.textoSec,fontStyle:"italic"}}>Motivo: {n.motivo}</div>}
+                <div style={{display:"flex",flexDirection:"column",gap:4,borderTop:`1px solid ${G.borde}`,paddingTop:8}}>
+                  {(n.devolucion_items||[]).map((it,idx)=>(
+                    <div key={idx} style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+                      <span>{it.nombre} <span style={{color:G.textoSec}}>x{it.cantidad}</span>{it.reingresa_stock&&<span style={{color:G.verde,fontSize:10}}> · reingresó stock</span>}</span>
+                      <span style={{fontFamily:"DM Mono,monospace"}}>{fmt((it.precio||0)*(it.cantidad||0))}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,borderTop:`1px solid ${G.borde}`,paddingTop:8}}>
+                  <span>Total nota de crédito</span>
+                  <span style={{color:G.rojo,fontFamily:"DM Mono,monospace"}}>{fmt(n.monto_total)}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </Modal>);
       })()}
