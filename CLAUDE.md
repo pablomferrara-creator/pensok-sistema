@@ -111,6 +111,17 @@ nuevo, o eligiendo un nombre.
   `filtroTareasResp`/`irATareasDe` en `App`, `filtroRespInicial`/`onConsumirFiltroResp` en
   `ModuloTareas`) — no es un patrón nuevo.
 
+## Calendario de Tareas — celdas de tamaño fijo (2026-08-11)
+
+Las celdas del calendario mensual (`tab==="calendario"` en `ModuloTareas`) usaban `minHeight:64`
+en vez de una altura fija, así que un día sin tareas quedaba mucho más chico que un día con 3
+tareas cargadas — Pablo pidió que todos los cuadros queden iguales. Fix: `height:80` fijo +
+`overflow:"hidden"` en la celda, y `flexShrink:0` en el número de día, cada tarea, y el "+N más" —
+así ningún contenido se comprime ni fuerza la celda a crecer, y si alguna vez el contenido no
+entra (no debería pasar, ya está limitado a `delDia.slice(0,3)` tareas) se recorta en vez de
+desbordar. El texto de cada tarea ya tenía `whiteSpace:"nowrap"` + `textOverflow:"ellipsis"` de
+antes -- eso no cambió, solo la altura del contenedor.
+
 ## Valor de stock — no debe contar negativo el stock negativo (2026-08-10)
 
 Las 3 fórmulas que calculan "valor de stock a costo" (`asegurarValorStockDiario` — la foto

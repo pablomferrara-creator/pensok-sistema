@@ -8117,14 +8117,14 @@ function ModuloTareas({tareas=[],responsables=[],vendedores=[],vendedoresOtro=[]
               const hayVencidas = f<hoyStr && pend.length>0;
               return(
                 <div key={d} onClick={()=>setDiaSel(diaSel===f?null:f)}
-                  style={{minHeight:64,background:diaSel===f?G.sup:G.sup2,border:`1px solid ${esHoy?G.verde:diaSel===f?G.azul:G.borde}`,borderRadius:8,padding:"5px 6px",cursor:delDia.length?"pointer":"default",display:"flex",flexDirection:"column",gap:3}}>
-                  <div style={{fontSize:11,fontWeight:esHoy?700:500,color:esHoy?G.verde:G.textoSec}}>{d}</div>
+                  style={{height:80,background:diaSel===f?G.sup:G.sup2,border:`1px solid ${esHoy?G.verde:diaSel===f?G.azul:G.borde}`,borderRadius:8,padding:"5px 6px",cursor:delDia.length?"pointer":"default",display:"flex",flexDirection:"column",gap:3,overflow:"hidden"}}>
+                  <div style={{fontSize:11,fontWeight:esHoy?700:500,color:esHoy?G.verde:G.textoSec,flexShrink:0}}>{d}</div>
                   {delDia.slice(0,3).map(t=>(
-                    <div key={t.id} style={{fontSize:9,padding:"1px 4px",borderRadius:4,background:t.estado==="hecha"?G.verde+"22":hayVencidas?G.rojo+"22":G.azul+"22",color:t.estado==="hecha"?G.verde:hayVencidas?G.rojo:G.azul,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:t.estado==="hecha"?"line-through":"none"}}>
+                    <div key={t.id} style={{fontSize:9,padding:"1px 4px",borderRadius:4,background:t.estado==="hecha"?G.verde+"22":hayVencidas?G.rojo+"22":G.azul+"22",color:t.estado==="hecha"?G.verde:hayVencidas?G.rojo:G.azul,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textDecoration:t.estado==="hecha"?"line-through":"none",flexShrink:0}}>
                       {t.titulo}
                     </div>
                   ))}
-                  {delDia.length>3&&<div style={{fontSize:9,color:G.textoSec}}>+{delDia.length-3} mas</div>}
+                  {delDia.length>3&&<div style={{fontSize:9,color:G.textoSec,flexShrink:0}}>+{delDia.length-3} mas</div>}
                 </div>
               );
             })}
