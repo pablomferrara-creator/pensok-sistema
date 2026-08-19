@@ -2943,6 +2943,30 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
     }
   }
 
+  // Buscador de cliente (2026-08-11, pedido de Pablo: en mobile el <select> nativo con todos los
+  // clientes es muy lento de recorrer). Mismo patrón que el buscador de productos de acá abajo --
+  // el input muestra el cliente elegido como placeholder, y solo despliega la lista mientras se
+  // está escribiendo algo (se vacía después de elegir).
+  const [clienteBusq, setClienteBusq] = useState("");
+  const clientesFiltrados = useMemo(()=>{
+    if(!clienteBusq.trim()) return [];
+    const q = clienteBusq.toLowerCase();
+    return [{id:"",nombre:"Consumidor Final",tipo:"minorista"},...clientes]
+      .filter(c=>c.nombre.toLowerCase().includes(q))
+      .slice(0,30);
+  },[clientes,clienteBusq]);
+  function seleccionarCliente(nuevoId){
+    cambiarCliente(nuevoId);
+    const cli = clientes.find(c=>String(c.id)===String(nuevoId));
+    const tipo = cli?.tipo||"minorista";
+    setItems(prev=>prev.map(i=>{
+      const prod=productos.find(p=>p.id===i.productoId);
+      if(!prod)return i;
+      return {...i,precio:precioARS(getPrecio(prod,tipo),prod.moneda)};
+    }));
+    setClienteBusq("");
+  }
+
   const prodFiltrados=useMemo(()=>{
     if(!busqueda)return productos.filter(p=>p.activo);
     const q=busqueda.toLowerCase();
@@ -3133,17 +3157,24 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
         <Card>
           <ST>Datos de la venta</ST>
           <div className="psk-venta-form" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            <Fi label="Cliente" value={clienteId} onChange={v=>{
-              cambiarCliente(v);
-              // Actualizar precios de items al cambiar cliente
-              const cli=clientes.find(c=>String(c.id)===String(v));
-              const tipo=cli?.tipo||"minorista";
-              setItems(prev=>prev.map(i=>{
-                const prod=productos.find(p=>p.id===i.productoId);
-                if(!prod)return i;
-                return {...i,precio:precioARS(getPrecio(prod,tipo),prod.moneda)};
-              }));
-            }} options={[{value:"",label:"Consumidor Final (minorista)"},...clientes.map(c=>({value:String(c.id),label:`${c.nombre} (${c.tipo})`}))]}/>
+            <div style={{position:"relative"}}>
+              <div style={{fontSize:11,color:G.textoSec,fontWeight:500,textTransform:"uppercase",letterSpacing:0.5,marginBottom:5}}>Cliente</div>
+              <input value={clienteBusq} onChange={e=>setClienteBusq(e.target.value)}
+                placeholder={cliente?`${cliente.nombre} (${cliente.tipo})`:"Consumidor Final (minorista) — buscar..."}
+                style={{background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"9px 12px",color:G.texto,fontSize:13,width:"100%",outline:"none"}}/>
+              {clienteBusq&&(
+                <div style={{position:"absolute",top:"100%",left:0,right:0,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,marginTop:4,zIndex:20,maxHeight:220,overflowY:"auto"}}>
+                  {clientesFiltrados.length===0?<div style={{padding:"12px 16px",color:G.textoSec,fontSize:13}}>Sin resultados</div>
+                  :clientesFiltrados.map(c=>(
+                    <div key={c.id||"cf"} onClick={()=>seleccionarCliente(c.id?String(c.id):"")}
+                      style={{padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${G.borde}22`,fontSize:13}}
+                      onMouseEnter={e=>e.currentTarget.style.background=G.borde} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      {c.nombre} <span style={{color:G.textoSec,fontSize:11}}>({c.tipo})</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <Fi label="Vendedor"       value={vendedor}  onChange={setVendedor}  options={[{value:"",label:"Seleccionar..."},...nombresVend.map(n=>({value:n,label:n}))]}/>
             <Fi label="Metodo de pago" value={metodo}    onChange={cambiarMetodo} options={METODOS_VENTA}/>
             <Fi label="Modalidad"      value={modalidad} onChange={cambiarModalidad} options={MODALIDADES}/>
