@@ -305,6 +305,15 @@ Mismo patrón que el caso de los 15/14 productos de Vulcano sin match en la list
 - Varios productos ya tenían un `costo_usd` viejo cargado (ej. Alguicida Nataclor 10L: 25,93) que resultó ser de una época anterior a que se empezara a aplicar el descuento del proveedor en el cálculo (`actualizarTipoCambio` sin descuento, ver sección de Vulcano más arriba) — quedó sobreescrito por el valor consistente con la fórmula actual (ej. ese mismo producto pasó a 49,15).
 - Corrido directo por psql, mismo criterio que Vulcano (no es cambio de esquema, no queda en `sql/`); reversa fila por fila en el scratchpad de la sesión.
 
+## Proveedor Makinthal — costo_usd desde PDF (2026-08-26)
+
+Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Química) con precios en dólares brutos (el pie del PDF aclara "se debe sumar Ingresos Brutos e I.V.A a los precios publicados"). No había poppler/pdftotext ni Python instalados en esta máquina, así que se instaló `pdf-parse` (npm, en el scratchpad de la sesión, no quedó como dependencia del proyecto) para extraer el texto — 17 páginas, 326 productos con formato `codigo descripcion precio`.
+
+- Se matcheó por `codigo` contra los 29 productos `proveedor ilike '%makin%'` en Pilar y Caamaño: **28 de 29 matchearon** directo. El que no — `MAK49-BT001L-01` "MAK R - Botella de 1 litro" — no está en este PDF (posible descontinuado); a pedido de Pablo se le derivó el costo bruto a la inversa desde el costo (ARS) que ya tenía, mismo patrón que los casos de Vulcano/Aguas.
+- Fórmula: `costo = round(costo_usd × (1+iva_pct/100) × TC(1510))` — **sin descuento**: `proveedores.descuento` de Makinthal está en 0% y Pablo confirmó que es correcto, Makinthal no da descuento (a diferencia de Vulcano/Aguas).
+- Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
+- Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
+
 ## Subir lista del proveedor (CSV) — deshabilitada (2026-08-26)
 
 El modo "Subir lista del proveedor" de `ModuloActualizarPrecios` (tab `modo==="csv"`, funciones `procesarCSV`/`actualizarDesdeCSV`) quedó **inaccesible desde la UI a pedido de Pablo** — se sacó el botón de la barra de tabs, el resto del código sigue intacto por si se retoma más adelante. Motivo: es un parser muy básico e insuficiente para listas reales de proveedores:
