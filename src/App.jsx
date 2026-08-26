@@ -519,9 +519,14 @@ function useData(toast){
   }
 
   useEffect(()=>{
-    cargar();
+    async function init(){
+      await cargar();
+      // Solo desde Pilar: ahi se gestionan los costos/precios, que despues se replican
+      if(localKey==="pilar") await autoActualizarMakinthalBNA();
+    }
+    init();
     // Auto-refresh cada 30 minutos para mantener los datos actualizados
-    const interval = setInterval(cargar, 30 * 60 * 1000);
+    const interval = setInterval(init, 30 * 60 * 1000);
     return () => clearInterval(interval);
   },[]);
 
@@ -1354,6 +1359,52 @@ function useData(toast){
     toast.ok(`${ok} de ${filas.length} productos actualizados desde lista`);
     await cargar();
     return ok;
+  }
+
+  // Auto-actualizacion diaria del TC de Makinthal contra el dolar BNA billete vendedor.
+  // Corre sola al abrir el sistema (y en cada auto-refresh de 30min), solo desde Pilar --
+  // en silencio, sin toast si todo sale bien (a pedido de Pablo). Si la cotizacion no cambio
+  // desde la ultima vez no escribe nada. Si la API falla o devuelve algo invalido, NO toca
+  // ningun precio -- deja los valores anteriores -- y ahi si avisa con un toast de error.
+  // Independiente de actualizarTipoCambio a proposito: este efecto corre justo despues de
+  // cargar() dentro del mismo useEffect de montaje, y en ese punto el estado de React
+  // (proveedores/productos) todavia no se actualizo con los datos recien traidos (closure
+  // vieja) -- por eso acá se consulta Supabase directo en vez de depender de ese estado.
+  async function autoActualizarMakinthalBNA(){
+    try{
+      const res = await fetch("https://dolarapi.com/v1/ambito/dolares/bna");
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      const bna = await res.json();
+      const venta = parseFloat(bna?.venta);
+      if(!(venta>0)) throw new Error("Cotizacion BNA invalida");
+
+      const {data:provs} = await supabase.from("proveedores").select("*").ilike("nombre","Makinthal");
+      const prov = (provs||[])[0];
+      if(!prov) return; // no existe el proveedor en esta base, nada que hacer
+      if(Math.round((prov.tipo_cambio_usd||0)*100)===Math.round(venta*100)) return; // sin cambios
+
+      const {data:prods} = await supabase.from("productos").select("*").eq("proveedor",prov.nombre).gt("costo_usd",0);
+      const descuento = 1-((prov.descuento||0)/100);
+      for(const prod of (prods||[])){
+        const costoARS = Math.round(prod.costo_usd*(1+(prod.iva_pct||21)/100)*venta*descuento);
+        const ganMin=(prod.ganancia_min||0); const ganMay=(prod.ganancia_may||0);
+        await supabase.from("productos").update({
+          costo:costoARS,
+          precio_min:ganMin>0?Math.round(costoARS*(1+ganMin/100)):prod.precio_min,
+          precio_esp:ganMin>0?Math.round(costoARS*(1+ganMin/100)*0.95):prod.precio_esp,
+          precio_may:ganMay>0?Math.round(costoARS*(1+ganMay/100)):prod.precio_may
+        }).eq("id",prod.id);
+        if(supabaseCamanio && prod.codigo){
+          try{ await supabaseCamanio.from("productos").update({costo:costoARS}).eq("codigo",prod.codigo); }
+          catch(e){ console.warn("No se pudo replicar TC BNA Makinthal en Caamaño:", e); }
+        }
+      }
+      await supabase.from("proveedores").update({tipo_cambio_usd:venta}).eq("id",prov.id);
+      await cargar();
+    }catch(e){
+      console.warn("No se pudo auto-actualizar el TC BNA de Makinthal:", e);
+      toast.err("No se pudo actualizar el tipo de cambio de Makinthal (BNA) — se mantienen los precios anteriores");
+    }
   }
 
   // ── EDICION ──────────────────────────────────────────────

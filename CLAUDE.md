@@ -314,6 +314,18 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Auto-actualización diaria del TC de Makinthal (dólar BNA) (2026-08-26)
+
+El mail donde Makinthal manda su lista aclara que hay que usar "el tipo de cambio BNA Billete vendedor". A pedido de Pablo, el sistema ahora **actualiza solo** el tipo de cambio y los precios de los productos de Makinthal, sin que haga falta tocar nada manualmente:
+
+- Función `autoActualizarMakinthalBNA()` en `useData` (cerca de `actualizarDesdeCSV`), llamada desde el `useEffect` de montaje de la app **justo después de `cargar()`, solo si `localKey==="pilar"`** (ahí se gestionan los costos, se replican solos a Caamaño) — y de nuevo en cada ciclo del auto-refresh de 30 min.
+- Fuente: `https://dolarapi.com/v1/ambito/dolares/bna` (misma API que ya usa "Cotizaciones del día" en Actualizar Precios) — devuelve `{compra, venta}` de Banco Nación; se usa `venta` (billete vendedor), verificado que hoy da $1535 y coincide con lo que muestra la home de BNA.
+- Si la cotización obtenida es igual a la ya guardada en `proveedores.tipo_cambio_usd` de Makinthal, **no escribe nada** (evita updates innecesarios en cada auto-refresh).
+- Si cambió: recalcula `costo`/`precio_min`/`precio_esp`/`precio_may` de todos los productos Makinthal con `costo_usd>0`, con la misma fórmula que `actualizarTipoCambio` (incluye el `descuento` del proveedor si algún día se carga uno — hoy Makinthal tiene 0%), replica `costo` a Caamaño por código, y guarda el nuevo TC en la ficha del proveedor.
+- **Sin aviso si sale bien** (a pedido explícito de Pablo — "prefiero que no me avise salvo que la api falle"). Si el fetch falla o la cotización viene inválida (`NaN`, `<=0`), **no toca ningún precio** — deja todo como estaba — y ahí sí muestra un `toast.err`.
+- Implementación deliberadamente **independiente de `actualizarTipoCambio`** (la función que usa el botón manual): correr justo después de `cargar()` en el mismo efecto de montaje cae en una closure vieja de `proveedores`/`productos` (el estado de React todavía no se actualizó con lo recién cargado) — por eso esta función consulta Supabase directo en vez de depender de ese estado. El botón manual de "Actualizar tipo de cambio" sigue funcionando exactamente igual que antes, sin tocar.
+- Solo aplica a Makinthal — Vulcano/Aguas siguen actualizándose a mano con el botón de siempre.
+
 ## Subir lista del proveedor (CSV) — deshabilitada (2026-08-26)
 
 El modo "Subir lista del proveedor" de `ModuloActualizarPrecios` (tab `modo==="csv"`, funciones `procesarCSV`/`actualizarDesdeCSV`) quedó **inaccesible desde la UI a pedido de Pablo** — se sacó el botón de la barra de tabs, el resto del código sigue intacto por si se retoma más adelante. Motivo: es un parser muy básico e insuficiente para listas reales de proveedores:
