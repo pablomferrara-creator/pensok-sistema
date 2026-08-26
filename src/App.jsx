@@ -80,7 +80,10 @@ const USD_RATE     = 1200;
 // HELPERS
 // ============================================================
 const fmt    = n => new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(n||0);
-const fmtNum = n => new Intl.NumberFormat("es-AR").format(n||0);
+// maximumFractionDigits:1 -- para que el stock (ahora con decimales, ver granel/consumo_granel)
+// muestre "4,6" cuando corresponde pero "5" (sin decimales) cuando el valor es entero. No afecta
+// a los demás usos de fmtNum (conteos, cantidades) porque esos siempre son enteros de por sí.
+const fmtNum = n => new Intl.NumberFormat("es-AR",{maximumFractionDigits:1}).format(n||0);
 const fmtUSD = n => `U$D ${new Intl.NumberFormat("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0)}`;
 const hoy    = () => new Date().toISOString().split("T")[0];
 const mesAct = () => new Date().toISOString().slice(0,7);
@@ -164,9 +167,9 @@ function Btn({children,onClick,variant="primary",small,disabled,style,full}){
   const v={primary:{background:G.verde,color:"#000",padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},secondary:{background:G.sup2,color:G.texto,border:`1px solid ${G.borde}`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},danger:{background:"#FF4D6A18",color:G.rojo,border:`1px solid #FF4D6A33`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},ghost:{background:"transparent",color:G.textoSec,padding:small?"3px 8px":"6px 12px",fontSize:small?11:13},outline:{background:"transparent",color:G.verde,border:`1px solid ${G.verde}55`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13},outlineAzul:{background:"transparent",color:G.azul,border:`1px solid ${G.azul}55`,padding:small?"5px 12px":"9px 18px",fontSize:small?12:13}};
   return <button onClick={onClick} disabled={disabled} style={{...base,...v[variant]}}>{children}</button>;
 }
-function Fi({label,value,onChange,type="text",options,placeholder,style,min,rows}){
+function Fi({label,value,onChange,type="text",options,placeholder,style,min,step,rows}){
   const s={background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,padding:"8px 11px",color:G.texto,fontSize:13,width:"100%",outline:"none"};
-  return(<div style={{display:"flex",flexDirection:"column",gap:5,...style}}>{label&&<label style={{fontSize:11,color:G.textoSec,fontWeight:500,textTransform:"uppercase",letterSpacing:0.5}}>{label}</label>}{options?<select value={value} onChange={e=>onChange(e.target.value)} style={{...s,cursor:"pointer"}}>{options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}</select>:rows?<textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{...s,resize:"vertical"}}/>:<input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} min={min} style={s}/>}</div>);
+  return(<div style={{display:"flex",flexDirection:"column",gap:5,...style}}>{label&&<label style={{fontSize:11,color:G.textoSec,fontWeight:500,textTransform:"uppercase",letterSpacing:0.5}}>{label}</label>}{options?<select value={value} onChange={e=>onChange(e.target.value)} style={{...s,cursor:"pointer"}}>{options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}</select>:rows?<textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{...s,resize:"vertical"}}/>:<input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} min={min} step={step} style={s}/>}</div>);
 }
 function ST({children}){return <div style={{fontSize:11,fontWeight:600,color:G.textoSec,textTransform:"uppercase",letterSpacing:1.2,marginBottom:12}}>{children}</div>;}
 function Div(){return <div style={{height:1,background:G.borde,margin:"14px 0"}}/>;}
@@ -1052,15 +1055,17 @@ function useData(toast){
           const litrosConsumidos=datos.cantidad*prod.consumo_granel;
           const granelStockBase = overrides[granel.id]!==undefined ? overrides[granel.id] : (granel.stock||0);
           const nuevoGranelStock = granelStockBase-litrosConsumidos;
-          await supabase.from("productos").update({stock:nuevoGranelStock}).eq("id",granel.id);
+          const{error:errGranel}=await supabase.from("productos").update({stock:nuevoGranelStock}).eq("id",granel.id);
+          if(errGranel){ console.error("Error descontando stock del granel:",errGranel); toast.err(`No se pudo descontar el consumo de "${granel.nombre}" -- revisalo a mano.`); }
           overrides[granel.id]=nuevoGranelStock;
-          await supabase.from("abastecimiento").insert({
+          const{error:errTraza}=await supabase.from("abastecimiento").insert({
             fecha:datos.fecha||hoy(), producto_id:granel.id, nombre:granel.nombre,
             cantidad:-litrosConsumidos, costo_unit:granel.costo||0,
             proveedor:"Envasado interno", metodo_pago:"Envasado interno",
             responsable:datos.responsable||"Pensok",
             notas:`Envasado en ${prod.nombre} (${datos.cantidad} u. × ${prod.consumo_granel})`,
           });
+          if(errTraza) console.error("Error dejando traza del envasado en abastecimiento:",errTraza);
         }
       }
     }
@@ -3194,7 +3199,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
                 {prodFiltrados.length===0?<div style={{padding:"12px 16px",color:G.textoSec,fontSize:13}}>Sin resultados</div>
                 :prodFiltrados.map(p=>(
                   <div key={p.id} onClick={()=>agregarItem(p)} style={{padding:"9px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${G.borde}22`}} onMouseEnter={e=>e.currentTarget.style.background=G.borde} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                    <div><div style={{fontSize:13,fontWeight:500}}>{p.nombre}</div><div style={{fontSize:11,color:G.textoSec}}>{p.codigo} · Stock: {p.stock}</div></div>
+                    <div><div style={{fontSize:13,fontWeight:500}}>{p.nombre}</div><div style={{fontSize:11,color:G.textoSec}}>{p.codigo} · Stock: {fmtNum(p.stock)}</div></div>
                     <div style={{fontSize:13,fontWeight:600,color:G.verde,fontFamily:"'DM Mono',monospace"}}>{fmt(precioARS(getPrecio(p,tipoCliente),p.moneda))}</div>
                   </div>
                 ))}
@@ -3489,7 +3494,7 @@ function ModuloPresupuestos({presupuestos=[],productos=[],onAprobar,onCancelar,o
                       <div style={{position:"absolute",top:"100%",left:0,right:0,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:8,marginTop:4,zIndex:10,maxHeight:200,overflowY:"auto"}}>
                         {hits.map(pr=>(
                           <div key={pr.id} onClick={()=>agregarItemEdit(pr)} style={{padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${G.borde}22`,display:"flex",justifyContent:"space-between",fontSize:12}}>
-                            <span>{pr.nombre}</span><span style={{color:G.textoSec}}>Stock: {pr.stock}</span>
+                            <span>{pr.nombre}</span><span style={{color:G.textoSec}}>Stock: {fmtNum(pr.stock)}</span>
                           </div>
                         ))}
                       </div>
@@ -5583,7 +5588,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       codigo:fCodigo, nombre:fNombre, categoria:fCat, moneda:fMoneda,
       costo:costo, ganancia_min:ganMin, ganancia_may:ganMay,
       precio_min:precioMin, precio_esp:precioEsp, precio_may:precioMay,
-      stock:parseInt(fStock)||0, stock_min:parseInt(fStockMin)||0,
+      stock:parseFloat(fStock)||0, stock_min:parseInt(fStockMin)||0,
       proveedor:fProv, activo:true,
       iva_pct:parseFloat(fIva)||21,
       descuento_proveedor:parseFloat(fDescProv)||0,
@@ -5799,7 +5804,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
         <td>${l.codigo}</td>
         <td>${l.nombre}</td>
         <td>${l.proveedor}</td>
-        <td style="text-align:center">${l.stock}</td>
+        <td style="text-align:center">${fmtNum(l.stock)}</td>
         <td style="text-align:center">${l.promMensual}</td>
         <td style="text-align:center;font-weight:700">${l.cantAPedir}</td>
         <td style="text-align:right">${fmt(l.costo)}</td>
@@ -5944,7 +5949,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                     <td style={{padding:"9px 12px",whiteSpace:"nowrap"}}><Badge color="gris">{p.categoria}</Badge></td>
                     <td style={{padding:"9px 12px",color:G.textoSec,whiteSpace:"nowrap",fontSize:11}}>{p.marca||"—"}</td>
                     {esAdmin&&<td style={{padding:"9px 12px",color:G.textoSec,whiteSpace:"nowrap",fontSize:11}}>{p.proveedor||"—"}</td>}
-                    <td style={{padding:"9px 12px",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap",color:e==="agotado"?G.rojo:e==="bajo"?G.amarillo:G.texto}}>{p.stock}<span style={{color:G.textoSec,fontWeight:400,fontSize:10}}> /{p.stock_min}</span></td>
+                    <td style={{padding:"9px 12px",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap",color:e==="agotado"?G.rojo:e==="bajo"?G.amarillo:G.texto}}>{fmtNum(p.stock)}<span style={{color:G.textoSec,fontWeight:400,fontSize:10}}> /{p.stock_min}</span></td>
                     {esAdmin&&<td style={{padding:"9px 12px",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{pF(p.costo)}</td>}
                     <td style={{padding:"9px 12px",fontFamily:"DM Mono,monospace",whiteSpace:"nowrap",fontWeight:600}}>{pF(p.precio_min)}</td>
                     <td style={{padding:"9px 12px",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{pF(p.precio_esp)}</td>
@@ -6162,7 +6167,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               </div>
             ):(
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                <Fi label="Stock actual" value={fStock}    onChange={setFStock}    type="number" min="0" placeholder="0"/>
+                <Fi label="Stock actual" value={fStock}    onChange={setFStock}    type="number" min="0" step="0.01" placeholder="0"/>
                 <Fi label="Stock minimo" value={fStockMin} onChange={setFStockMin} type="number" min="0" placeholder="0"/>
               </div>
             )}
@@ -6173,7 +6178,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
               <Fi label="Se envasa desde" value={fGranelId} onChange={setFGranelId}
                 options={[{value:"",label:"— Ninguno —"},...productos.filter(p=>p.id!==editando?.id).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(p=>({value:String(p.id),label:p.nombre}))]}/>
-              <Fi label="Litros por unidad" value={fConsumoGranel} onChange={setFConsumoGranel} type="number" min="0" placeholder="Ej: 5"/>
+              <Fi label="Litros por unidad" value={fConsumoGranel} onChange={setFConsumoGranel} type="number" min="0" step="0.01" placeholder="Ej: 5"/>
             </div>
           </div>
         </Modal>
@@ -6246,7 +6251,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                       <td style={{padding:"7px 10px",fontFamily:"DM Mono,monospace",fontSize:10,color:G.textoSec}}>{l.codigo}</td>
                       <td style={{padding:"7px 10px",fontWeight:500,maxWidth:200}}>{l.nombre}</td>
                       <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{l.stock}</td>
+                      <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stock)}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",color:G.textoSec,fontFamily:"DM Mono,monospace"}}>{l.promMensual}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",fontWeight:700,color:G.verde,fontFamily:"DM Mono,monospace",fontSize:14}}>{l.cantAPedir}</td>
                       <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{fmt(l.costo)}</td>
@@ -6615,7 +6620,7 @@ function ModuloTraspasos({traspasos,pagosTraspaso,productos,onRegistrar,onPago,o
                 <div key={i.id} style={{display:"grid",gridTemplateColumns:"1fr 90px 110px 32px",gap:8,alignItems:"center",background:G.sup2,borderRadius:8,padding:"8px 12px"}}>
                   <div style={{fontSize:12}}>
                     <div style={{fontWeight:500}}>{i.nombre}</div>
-                    <div style={{color:G.textoSec,fontSize:10}}>Stock disponible: {i.stock} · Costo: {fmt(i.costo)}</div>
+                    <div style={{color:G.textoSec,fontSize:10}}>Stock disponible: {fmtNum(i.stock)} · Costo: {fmt(i.costo)}</div>
                   </div>
                   <input type="number" value={i.cantidad} min={1} max={i.stock}
                     onChange={e=>actualizarCantidad(i.id,e.target.value)}
@@ -6861,7 +6866,7 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],tareas=[],onR
                   {prodFilt.map(p=>(
                     <div key={p.id} onClick={()=>agregarItem(p)} style={{padding:"9px 14px",cursor:"pointer",borderBottom:`1px solid ${G.borde}22`}} onMouseEnter={e=>e.currentTarget.style.background=G.borde} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       <div style={{fontSize:13,fontWeight:500}}>{p.nombre}</div>
-                      <div style={{fontSize:11,color:G.textoSec}}>Stock: {p.stock} · Ultimo costo: {p.moneda==="USD"?fmtUSD(p.costo):fmt(p.costo)}</div>
+                      <div style={{fontSize:11,color:G.textoSec}}>Stock: {fmtNum(p.stock)} · Ultimo costo: {p.moneda==="USD"?fmtUSD(p.costo):fmt(p.costo)}</div>
                     </div>
                   ))}
                 </div>
@@ -6875,7 +6880,7 @@ function ModuloAbastecimiento({productos,abastecimiento,egresos=[],tareas=[],onR
                     <div key={it.productoId} style={{display:"flex",alignItems:"center",gap:8,background:G.sup2,borderRadius:8,padding:"8px 10px"}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</div>
-                        {prod&&<div style={{fontSize:11,color:G.textoSec}}>Stock actual: {prod.stock} → {prod.stock+it.cantidad}</div>}
+                        {prod&&<div style={{fontSize:11,color:G.textoSec}}>Stock actual: {fmtNum(prod.stock)} → {fmtNum(prod.stock+it.cantidad)}</div>}
                       </div>
                       <input type="number" value={it.cantidad} onChange={e=>{const raw=e.target.value;const n=parseInt(raw);setItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,cantidad:raw===""?0:(isNaN(n)?0:n)}:i));}}
                         title="Cantidad ingresada. Poné un número negativo (ej. -1) para corregir/descontar stock."
@@ -8268,7 +8273,7 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
   async function guardarConteo(){
     if(!puedeGuardar) return;
     setGuardando(true);
-    const items = productosCategoria.map(p=>({id:p.id,codigo:p.codigo,nombre:p.nombre,stock:p.stock,contado:parseInt(valores[p.id])||0}));
+    const items = productosCategoria.map(p=>({id:p.id,codigo:p.codigo,nombre:p.nombre,stock:p.stock,contado:parseFloat(valores[p.id])||0}));
     const ok = await onCrear({categoria:categoriaSel,responsable:respSel,items});
     setGuardando(false);
     if(ok){ setCategoriaSel(""); setValores({}); setVista("historial"); }
@@ -8293,7 +8298,7 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
   async function guardarEdicionConteo(){
     if(!verConteo) return;
     setGuardandoEdicion(true);
-    const itemsEditados=(verConteo.conteos_stock_items||[]).map(it=>({id:it.id,contado:parseInt(valoresEdicion[it.id])||0}));
+    const itemsEditados=(verConteo.conteos_stock_items||[]).map(it=>({id:it.id,contado:parseFloat(valoresEdicion[it.id])||0}));
     await onEditarConteo(itemsEditados);
     setGuardandoEdicion(false);
     setEditandoConteo(false);
@@ -8469,7 +8474,7 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
                         <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.nombre}</div>
                         <div style={{fontSize:11,color:G.textoSec}}>Código {p.codigo} · Stock sistema: {fmtNum(p.stock)}</div>
                       </div>
-                      <input type="number" value={valores[p.id]??""} onChange={e=>setValores(v=>({...v,[p.id]:e.target.value}))}
+                      <input type="number" step="0.01" value={valores[p.id]??""} onChange={e=>setValores(v=>({...v,[p.id]:e.target.value}))}
                         placeholder="0" style={{width:90,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:8,padding:"7px 10px",color:G.texto,fontSize:13,outline:"none",textAlign:"right"}}/>
                     </div>
                   ))}
@@ -8577,7 +8582,7 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
                   <div key={it.id} style={{display:"grid",gridTemplateColumns:editandoConteo?"1fr 90px 90px":"1fr 90px 90px 90px",gap:8,padding:"7px 8px",fontSize:12,background:G.sup2,borderRadius:6,alignItems:"center"}}>
                     <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</span>
                     {editandoConteo?(
-                      <input type="number" value={valoresEdicion[it.id]??""} onChange={e=>setValoresEdicion(v=>({...v,[it.id]:e.target.value}))}
+                      <input type="number" step="0.01" value={valoresEdicion[it.id]??""} onChange={e=>setValoresEdicion(v=>({...v,[it.id]:e.target.value}))}
                         style={{width:"100%",background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 8px",color:G.texto,fontSize:12,outline:"none",textAlign:"right"}}/>
                     ):(
                       <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:it.stock_contado!==it.stock_sistema?G.amarillo:G.texto}}>{fmtNum(it.stock_contado)}</span>
@@ -9898,7 +9903,7 @@ function ModuloPedidosWeb({pedidosWeb,onAceptar,onRechazar,productos}){
                             {it.nombre}
                           </div>
                           {prod && !stockOK && (
-                            <div style={{fontSize:10,color:G.rojo,marginTop:2}}>⚠ Stock actual: {prod.stock} (insuficiente)</div>
+                            <div style={{fontSize:10,color:G.rojo,marginTop:2}}>⚠ Stock actual: {fmtNum(prod.stock)} (insuficiente)</div>
                           )}
                           {it.mostrar_siempre && (
                             <div style={{fontSize:10,color:G.amarillo,marginTop:2}}>📦 Producto a granel — verificar disponibilidad</div>
