@@ -9408,7 +9408,10 @@ function ModuloActualizarPrecios({proveedores,productos,tipoCambio,onActualizarT
       <div style={{display:"flex",gap:6}}>
         <Btn variant={modo==="tc"?"primary":"secondary"}  onClick={()=>setModo("tc")}>Tipo de cambio USD</Btn>
         <Btn variant={modo==="pct"?"primary":"secondary"} onClick={()=>setModo("pct")}>% de aumento</Btn>
-        <Btn variant={modo==="csv"?"primary":"secondary"} onClick={()=>setModo("csv")}>Subir lista del proveedor</Btn>
+        {/* "Subir lista del proveedor" (modo csv) deshabilitada a pedido de Pablo -- el parser
+            es muy básico (CSV con encabezados por palabra clave, sin soporte de USD/IVA/TC) y
+            no está listo para listas reales como la de Vulcano. Código intacto por si se retoma
+            más adelante, solo se sacó el botón que la hace accesible. */}
       </div>
 
       {/* ── MODO TC ── */}

@@ -304,7 +304,15 @@ Mismo patrón que el caso de los 15/14 productos de Vulcano sin match en la list
 - Aplicado a **40 de 40 productos** en Pilar y **40 de 40 en Caamaño**.
 - Varios productos ya tenían un `costo_usd` viejo cargado (ej. Alguicida Nataclor 10L: 25,93) que resultó ser de una época anterior a que se empezara a aplicar el descuento del proveedor en el cálculo (`actualizarTipoCambio` sin descuento, ver sección de Vulcano más arriba) — quedó sobreescrito por el valor consistente con la fórmula actual (ej. ese mismo producto pasó a 49,15).
 - Corrido directo por psql, mismo criterio que Vulcano (no es cambio de esquema, no queda en `sql/`); reversa fila por fila en el scratchpad de la sesión.
-  - Se corrió directo por psql contra Pilar y Caamaño (no quedó como par up/down en `sql/` porque no es un cambio de esquema — es una corrección de datos, igual que la de stock del producto 773 en la sección anterior); el SQL ejecutado (con su reversa fila por fila, por `id` en Pilar y por `codigo` en Caamaño) quedó en el scratchpad de la sesión, no en el repo.
+
+## Subir lista del proveedor (CSV) — deshabilitada (2026-08-26)
+
+El modo "Subir lista del proveedor" de `ModuloActualizarPrecios` (tab `modo==="csv"`, funciones `procesarCSV`/`actualizarDesdeCSV`) quedó **inaccesible desde la UI a pedido de Pablo** — se sacó el botón de la barra de tabs, el resto del código sigue intacto por si se retoma más adelante. Motivo: es un parser muy básico e insuficiente para listas reales de proveedores:
+- Solo lee texto plano (CSV/TXT), no `.xlsx` real.
+- Adivina qué columna es código/nombre/costo buscando palabras clave ("cod", "prod"/"nom"/"desc", "cost"/"precio"/"unit") en la primera fila — no tiene forma de manejar un archivo con múltiples layouts de columnas en la misma hoja, como el de Vulcano (ver bug documentado arriba).
+- Aplica `costo = precio_del_archivo × (1-descuento)` directo, sin sumar IVA ni aplicar tipo de cambio — no sirve para una lista en dólares brutos como la de Vulcano/Aguas, solo para una lista ya en pesos.
+
+Si en el futuro se retoma, habría que al menos: parsear `.xlsx` nativamente, soportar el circuito USD/IVA/TC igual que el formulario de producto, y mostrar un preview claro de qué va a cambiar antes de aplicar.
 
 ## Editar/eliminar Traspasos (2026-08-11)
 
