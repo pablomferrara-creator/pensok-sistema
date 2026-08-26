@@ -1270,12 +1270,17 @@ function useData(toast){
   async function actualizarTipoCambio(nuevoTC, soloProveedor=null){
     const provsUSD=(proveedores||[]).filter(p=>p.moneda==="USD"&&(soloProveedor?p.nombre===soloProveedor:true));
     const nombresUSD=provsUSD.map(p=>p.nombre);
+    // Descuento del proveedor (ej. Vulcano: 25% + 10% por contado, ya compuesto en un solo
+    // % -- (1-0.25)*(1-0.10)=0.675, o sea 32.5% -- guardado en proveedores.descuento). Antes
+    // este campo se guardaba pero nunca se usaba acá, así que el TC solo aplicaba IVA.
+    const descuentoPorProveedor=Object.fromEntries(provsUSD.map(p=>[p.nombre,p.descuento||0]));
     const prodsUSD=productos.filter(p=>nombresUSD.includes(p.proveedor)&&(p.costo_usd||0)>0);
     let actualizados=0;
     for(const prod of prodsUSD){
       const costoUSD=prod.costo_usd||0;
       const iva=1+((prod.iva_pct||21)/100);
-      const costoARS=Math.round(costoUSD*iva*nuevoTC);
+      const descuento=1-((descuentoPorProveedor[prod.proveedor]||0)/100);
+      const costoARS=Math.round(costoUSD*iva*nuevoTC*descuento);
       const ganMin=(prod.ganancia_min||0); const ganMay=(prod.ganancia_may||0);
       const cambios={
         costo:costoARS,
@@ -5293,7 +5298,7 @@ function ModuloClientes({clientes,onGuardar,ventas}){
 // ============================================================
 // MODULO: PRODUCTOS
 // ============================================================
-function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],esAdmin=true,toast}){
+function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],esAdmin=true,toast,tipoCambio}){
   const [busqueda,  setB]       = useState("");
   const [filtroC,   setFC]      = useState("Todas");
   const [filtroE,   setFE]      = useState("Todos");
@@ -5313,6 +5318,8 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   const [pdfMarca,   setPdfMarca]   = useState("Todas");
   const [pdfEstado,  setPdfEstado]  = useState("Todos");
   const [fMoneda,setFMon]=useState("ARS"); const [fCosto,setFCosto]=useState("");
+  const [fCostoUsd,setFCostoUsd]=useState(""); // costo en USD -- solo se usa/muestra si fMoneda==="USD"
+  const [fMarca,setFMc]=useState("");
   const [fGanMin,setFGanMin]=useState(""); const [fGanMay,setFGanMay]=useState("");
   const [fStock,setFStock]=useState(""); const [fStockMin,setFStockMin]=useState("");
   const [fProv,setFProv]=useState("");
@@ -5320,8 +5327,16 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   const [fGranelId,setFGranelId]=useState(""); const [fConsumoGranel,setFConsumoGranel]=useState("");
   const [loading,setLoading]=useState(false);
 
-  // Calcular precios en tiempo real
-  const costo   = parseFloat(fCosto)||0;
+  // Calcular precios en tiempo real. Si el producto es USD, el costo en ARS que se guarda y
+  // que alimenta los precios NO se tipea directo -- se deriva de costo_usd × IVA × tipo de
+  // cambio × descuento del proveedor (mismo criterio que "Actualizar Precios → Tipo de
+  // cambio", para que cargar un producto nuevo y actualizar el TC más adelante den el mismo
+  // número). El descuento es el % del proveedor (ej. Vulcano: 25%+10% por contado, ya
+  // compuesto en un solo campo -- ver `proveedores.descuento`).
+  const descuentoProv = (proveedores||[]).find(p=>p.nombre===fProv)?.descuento||0;
+  const costo = fMoneda==="USD"
+    ? Math.round((parseFloat(fCostoUsd)||0)*(1+(parseFloat(fIva)||21)/100)*(tipoCambio||0)*(1-descuentoProv/100))
+    : parseFloat(fCosto)||0;
   const ganMin  = parseFloat(fGanMin)||0;
   const ganMay  = parseFloat(fGanMay)||0;
   const r100    = n => Math.ceil(n/100)*100;
@@ -5560,6 +5575,8 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   function abrirEditar(p){
     setEditando(p);setFK(p.codigo);setFN(p.nombre);setFCat(p.categoria||CATEGORIAS[0]);setFMon(p.moneda||"ARS");
     setFCosto(String(p.costo||""));
+    setFCostoUsd(p.costo_usd?String(p.costo_usd):"");
+    setFMc(p.marca||"");
     const gMin = p.costo>0&&p.precio_min>0 ? Math.round((p.precio_min/p.costo-1)*100) : (p.ganancia_min||0);
     const gMay = p.costo>0&&p.precio_may>0 ? Math.round((p.precio_may/p.costo-1)*100) : (p.ganancia_may||0);
     setFGanMin(String(gMin));setFGanMay(String(gMay));
@@ -5573,7 +5590,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   }
   function abrirNuevo(){
     setEditando(null);setFK("");setFN("");setFCat(CATEGORIAS[0]);setFMon("ARS");
-    setFCosto("");setFGanMin("");setFGanMay("");setFStock("");setFStockMin("");
+    setFCosto("");setFCostoUsd("");setFMc("");setFGanMin("");setFGanMay("");setFStock("");setFStockMin("");
     setFProv("");setFIva("21");setFDescProv("0");setFGranelId("");setFConsumoGranel("");setModal(true);
   }
 
@@ -5582,11 +5599,12 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     productos.some(p=>p.codigo?.toLowerCase()===fCodigo.trim().toLowerCase());
 
   async function guardar(){
-    if(!fCodigo||!fNombre||!fCosto||!fGanMin||!fGanMay)return;
+    if(!fCodigo||!fNombre||!costo||!fGanMin||!fGanMay)return;
     setLoading(true);
     const datos={
-      codigo:fCodigo, nombre:fNombre, categoria:fCat, moneda:fMoneda,
-      costo:costo, ganancia_min:ganMin, ganancia_may:ganMay,
+      codigo:fCodigo, nombre:fNombre, categoria:fCat, marca:fMarca, moneda:fMoneda,
+      costo:costo, costo_usd:fMoneda==="USD"?(parseFloat(fCostoUsd)||0):0,
+      ganancia_min:ganMin, ganancia_may:ganMay,
       precio_min:precioMin, precio_esp:precioEsp, precio_may:precioMay,
       stock:parseFloat(fStock)||0, stock_min:parseInt(fStockMin)||0,
       proveedor:fProv, activo:true,
@@ -6103,9 +6121,10 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             </div>
             <Fi label="Nombre del producto" value={fNombre} onChange={setFN} placeholder="Ej: Cloro liquido 5L"/>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Fi label="Marca" value={fMarca} onChange={setFMc} placeholder="Ej: Pensok, Vulcano"/>
               <Fi label="Proveedor" value={fProv}   onChange={setFProv} options={(proveedores||[]).filter(p=>p.activo).map(p=>p.nombre)}/>
-              <Fi label="Moneda"    value={fMoneda}  onChange={setFMon} options={["ARS","USD"]}/>
             </div>
+            <Fi label="Moneda"    value={fMoneda}  onChange={setFMon} options={["ARS","USD"]}/>
             <Div/>
             {/* Costo y margenes */}
             <ST>Costo y margenes</ST>
@@ -6115,21 +6134,43 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               </div>
             )}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
-              <Fi label={`Costo (${fMoneda})`} value={fCosto} onChange={localKey==="camanio"?()=>{}:setFCosto} type="number" placeholder="0" style={localKey==="camanio"?{opacity:0.5,pointerEvents:"none"}:{}}/>
+              {fMoneda==="USD"?(
+                <Fi label="Costo (USD)" value={fCostoUsd} onChange={localKey==="camanio"?()=>{}:setFCostoUsd} type="number" step="0.0001" placeholder="0" style={localKey==="camanio"?{opacity:0.5,pointerEvents:"none"}:{}}/>
+              ):(
+                <Fi label="Costo (ARS)" value={fCosto} onChange={localKey==="camanio"?()=>{}:setFCosto} type="number" placeholder="0" style={localKey==="camanio"?{opacity:0.5,pointerEvents:"none"}:{}}/>
+              )}
               <Fi label="Margen minorista (%)"       value={fGanMin}  onChange={setFGanMin}  type="number" placeholder="Ej: 100"/>
               <Fi label="Margen mayorista (%)"       value={fGanMay}  onChange={setFGanMay}  type="number" placeholder="Ej: 40"/>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
-              <Fi label="IVA (%)"                   value={fIva}     onChange={setFIva}     type="number" placeholder="21" options={["21","10.5","0"]}/>
-              <Fi label="Descuento proveedor (%)"   value={fDescProv} onChange={setFDescProv} type="number" placeholder="0"/>
-              <div style={{display:"flex",flexDirection:"column",gap:5,justifyContent:"flex-end"}}>
-                {fCosto&&fDescProv&&parseFloat(fDescProv)>0&&(
-                  <div style={{fontSize:11,color:G.textoSec,background:G.sup2,borderRadius:6,padding:"6px 10px"}}>
-                    Costo c/desc: <strong style={{color:G.verde}}>{fmt(parseFloat(fCosto)*(1-parseFloat(fDescProv)/100))}</strong>
-                  </div>
-                )}
+            {fMoneda==="USD"?(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
+                <Fi label="IVA (%)" value={fIva} onChange={setFIva} type="number" placeholder="21" options={["21","10.5","0"]}/>
+                <div style={{display:"flex",flexDirection:"column",gap:5,justifyContent:"flex-end"}}>
+                  {(parseFloat(fCostoUsd)||0)>0&&(tipoCambio||0)>0&&(
+                    <div style={{fontSize:11,color:G.textoSec,background:G.sup2,borderRadius:6,padding:"6px 10px"}}>
+                      Costo en ARS: <strong style={{color:G.verde}}>{fmt(costo)}</strong> · IVA{descuentoProv>0?` + ${descuentoProv}% desc. de ${fProv}`:""}, TC {fmtNum(tipoCambio)}
+                    </div>
+                  )}
+                  {(parseFloat(fCostoUsd)||0)>0&&!((tipoCambio||0)>0)&&(
+                    <div style={{fontSize:11,color:G.amarillo,background:"#FFB80011",borderRadius:6,padding:"6px 10px"}}>
+                      ⚠ No hay tipo de cambio cargado todavía — configuralo en Configuración → Actualizar Precios.
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            ):(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+                <Fi label="IVA (%)"                   value={fIva}     onChange={setFIva}     type="number" placeholder="21" options={["21","10.5","0"]}/>
+                <Fi label="Descuento proveedor (%)"   value={fDescProv} onChange={setFDescProv} type="number" placeholder="0"/>
+                <div style={{display:"flex",flexDirection:"column",gap:5,justifyContent:"flex-end"}}>
+                  {fCosto&&fDescProv&&parseFloat(fDescProv)>0&&(
+                    <div style={{fontSize:11,color:G.textoSec,background:G.sup2,borderRadius:6,padding:"6px 10px"}}>
+                      Costo c/desc: <strong style={{color:G.verde}}>{fmt(parseFloat(fCosto)*(1-parseFloat(fDescProv)/100))}</strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {/* Preview precios calculados */}
             {costo>0&&ganMin>0&&ganMay>0&&(
               <div style={{background:G.sup2,borderRadius:10,padding:"14px 16px"}}>
@@ -9765,7 +9806,7 @@ export default function App(){
               {modulo==="pedidos_web"    && <ModuloPedidosWeb     pedidosWeb={data.pedidosWeb||[]} onAceptar={data.aceptarPedidoWeb} onRechazar={data.rechazarPedidoWeb} productos={data.productos}/>}
               {modulo==="egresos"        && <ModuloEgresos  esAdmin={esAdmin}        egresos={data.egresos} pagosEgreso={data.pagosEgreso} abastecimiento={data.abastecimiento} descuentosEgreso={data.descuentosEgreso} deudaAPilar={data.deudaAPilar} onRegistrar={data.registrarEgreso} onReembolsar={data.marcarReembolsado} onRegistrarPago={data.registrarPagoEgreso} onEliminarPago={data.eliminarPagoEgreso} onEditarPago={data.editarPagoEgreso} onRegistrarDescuento={data.registrarDescuentoEgreso} onEliminarDescuento={data.eliminarDescuentoEgreso} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarEgreso} onEliminar={data.eliminarEgreso} filtroInicial={filtroEgresos} onConsumirFiltro={()=>setFiltroEgresos("")}/>}
               {modulo==="clientes"       && <ModuloClientes       clientes={data.clientes} onGuardar={data.guardarCliente} ventas={data.ventasConItems}/>}
-              {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast}/>}
+              {modulo==="productos"      && <ModuloProductos      productos={data.productos} onGuardar={data.guardarProducto} onEliminar={data.eliminarProducto} proveedores={data.proveedores} ventas={data.ventasConItems} esAdmin={esAdmin} toast={toast} tipoCambio={data.tipoCambio}/>}
               {modulo==="abastecimiento" && <ModuloAbastecimiento productos={data.productos} abastecimiento={data.abastecimiento} egresos={data.egresos} tareas={data.tareas} onRegistrar={data.registrarAbastecimiento} onRegistrarLote={data.registrarAbastecimientoLote} vendedores={data.vendedores} proveedores={data.proveedores} onEditar={data.editarAbastecimiento} onEliminar={data.eliminarAbastecimiento}/>}
               {modulo==="stock_fisico"   && <ModuloControlStock    productos={data.productos} conteosStock={data.conteosStock} onCrear={data.crearConteoStock} onAplicar={data.aplicarConteoStock} onEditarConteo={data.editarConteoStockItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
               {modulo==="traspasos"      && <ModuloTraspasos      traspasos={data.traspasos} pagosTraspaso={data.pagosTraspaso} productos={data.productos} onRegistrar={data.registrarTraspaso} onPago={data.registrarPagoTraspaso} onEditar={data.editarTraspaso} onEliminar={data.eliminarTraspaso} totalDeudaCamanio={data.totalDeudaCamanio} localKey={localKey} toast={toast}/>}
