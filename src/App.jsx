@@ -7110,6 +7110,7 @@ const BOLSILLOS = [
   {key:"mp",         label:"Mercado Pago"},
   {key:"banco",      label:"Banco"},
   {key:"ahorro",     label:"Ahorro"},
+  {key:"dolares",    label:"Dólares (USD)"},
 ];
 
 function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devoluciones=[],toast}){
@@ -7122,10 +7123,11 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const [movOrigen,   setMovOrigen]  = useState("caja_chica");
   const [movDestino,  setMovDestino] = useState("banco");
   const [movMonto,    setMovMonto]   = useState("");
+  const [movTC,       setMovTC]      = useState(""); // solo cuando el movimiento cruza pesos<->dolares
   const [movConcepto, setMovConcepto]= useState("");
   const [loadingMov,  setLoadingMov] = useState(false);
   const [pagosDia,    setPagosDia]   = useState([]);
-  const [config,      setConfig]     = useState(null); // {fecha_inicio, saldo_caja_chica, saldo_mp, saldo_banco, saldo_ahorro}
+  const [config,      setConfig]     = useState(null); // {fecha_inicio, saldo_caja_chica, saldo_mp, saldo_banco, saldo_ahorro, saldo_dolares}
   const [configLoading, setConfigLoading] = useState(true);
 
   // Saldos reales ingresados al momento del cierre actual
@@ -7133,6 +7135,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const [saldoMP,     setSaldoMP]    = useState("");
   const [saldoBanco,  setSaldoBanco] = useState("");
   const [saldoAhorro, setSaldoAhorro]= useState("");
+  const [saldoDolares,setSaldoDolares]=useState("");
 
   // Campos del formulario de configuración inicial (primera vez)
   const [cfgFecha,    setCfgFecha]    = useState(hoy());
@@ -7140,6 +7143,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const [cfgMP,       setCfgMP]       = useState("");
   const [cfgBanco,    setCfgBanco]    = useState("");
   const [cfgAhorro,   setCfgAhorro]   = useState("");
+  const [cfgDolares,  setCfgDolares]  = useState("");
   const [cfgLoading,  setCfgLoading]  = useState(false);
 
   // ── Libro de movimientos ──
@@ -7185,6 +7189,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
       saldo_mp: parseFloat(cfgMP)||0,
       saldo_banco: parseFloat(cfgBanco)||0,
       saldo_ahorro: parseFloat(cfgAhorro)||0,
+      saldo_dolares: parseFloat(cfgDolares)||0,
     };
     const {error} = await supabase.from("caja_config").insert(payload);
     if(error){ toast.err("Error al guardar configuración: "+error.message); setCfgLoading(false); return; }
@@ -7219,6 +7224,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
             <Fi label="Mercado Pago" value={cfgMP} onChange={setCfgMP} type="number" placeholder="0"/>
             <Fi label="Banco" value={cfgBanco} onChange={setCfgBanco} type="number" placeholder="0"/>
             <Fi label="Ahorro (caja de seguridad)" value={cfgAhorro} onChange={setCfgAhorro} type="number" placeholder="0"/>
+            <Fi label="Dólares (USD, si ya tenés algo ahorrado)" value={cfgDolares} onChange={setCfgDolares} type="number" placeholder="0"/>
           </div>
         </Card>
         <Btn full onClick={guardarConfigInicial} disabled={cfgLoading}>
@@ -7234,6 +7240,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const arranqueMP     = config.saldo_mp||0;
   const arranqueBanco  = config.saldo_banco||0;
   const arranqueAhorro = config.saldo_ahorro||0;
+  const arranqueDolares= config.saldo_dolares||0;
 
   const ultimoCierre = cierres[0]||null;
 
@@ -7352,7 +7359,10 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const calcBolsillo = (bolsillo) => {
     const cobros = pagosDesde.filter(p=>p.tipo==="ingreso");
     const reembs = pagosDesde.filter(p=>p.tipo==="egreso");
-    const movEntra = movsDesde.filter(m=>m.destino===bolsillo).reduce((s,m)=>s+(m.monto||0),0);
+    // monto_destino: lo que ENTRA al bolsillo destino, en SU propia moneda (si el movimiento
+    // cruza pesos<->dolares, es distinto de "monto"; si no cruza, es igual a monto -- por eso
+    // el fallback). monto siempre es lo que SALE del origen, en la moneda del origen.
+    const movEntra = movsDesde.filter(m=>m.destino===bolsillo).reduce((s,m)=>s+(m.monto_destino??m.monto??0),0);
     const movSale  = movsDesde.filter(m=>m.origen===bolsillo).reduce((s,m)=>s+(m.monto||0),0);
     const movNeto  = movEntra - movSale;
 
@@ -7380,7 +7390,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
       const gBaLegacy = egresosDesde.filter(e=>BANCO_METODOS.includes(e.metodo_pago)).reduce((s,e)=>s+(e.monto||0),0);
       return vBa - gBaPagos - gBaLegacy - reBa - devBanco + descBancoDesde + movNeto;
     }
-    if(bolsillo==="ahorro"){
+    if(bolsillo==="ahorro"||bolsillo==="dolares"){
       return movNeto;
     }
     return 0;
@@ -7395,15 +7405,22 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const reembDeudaEf   = reembsEgreso.filter(p=>p.metodo_pago==="Efectivo").reduce((s,p)=>s+p.monto,0);
   const reembDeudaMP   = reembsEgreso.filter(p=>MP_METODOS.includes(p.metodo_pago)).reduce((s,p)=>s+p.monto,0);
   const reembDeudaBanco= reembsEgreso.filter(p=>BANCO_METODOS.includes(p.metodo_pago)).reduce((s,p)=>s+p.monto,0);
-  const movNetoCaja    = movsDesde.filter(m=>m.destino==="caja_chica").reduce((s,m)=>s+(m.monto||0),0) - movsDesde.filter(m=>m.origen==="caja_chica").reduce((s,m)=>s+(m.monto||0),0);
-  const movNetoMP       = movsDesde.filter(m=>m.destino==="mp").reduce((s,m)=>s+(m.monto||0),0) - movsDesde.filter(m=>m.origen==="mp").reduce((s,m)=>s+(m.monto||0),0);
-  const movNetoBanco    = movsDesde.filter(m=>m.destino==="banco").reduce((s,m)=>s+(m.monto||0),0) - movsDesde.filter(m=>m.origen==="banco").reduce((s,m)=>s+(m.monto||0),0);
-  const movNetoAhorro   = movsDesde.filter(m=>m.destino==="ahorro").reduce((s,m)=>s+(m.monto||0),0) - movsDesde.filter(m=>m.origen==="ahorro").reduce((s,m)=>s+(m.monto||0),0);
+  const movEntraDe = (bolsillo) => movsDesde.filter(m=>m.destino===bolsillo).reduce((s,m)=>s+(m.monto_destino??m.monto??0),0);
+  const movSaleDe  = (bolsillo) => movsDesde.filter(m=>m.origen===bolsillo).reduce((s,m)=>s+(m.monto||0),0);
+  const movNetoCaja    = movEntraDe("caja_chica") - movSaleDe("caja_chica");
+  const movNetoMP       = movEntraDe("mp") - movSaleDe("mp");
+  const movNetoBanco    = movEntraDe("banco") - movSaleDe("banco");
+  const movNetoAhorro   = movEntraDe("ahorro") - movSaleDe("ahorro");
+  const movNetoDolares  = movEntraDe("dolares") - movSaleDe("dolares");
 
   const esperadoCaja   = arranqueCaja   + calcBolsillo("caja_chica");
   const esperadoMP     = arranqueMP     + calcBolsillo("mp");
   const esperadoBanco  = arranqueBanco  + calcBolsillo("banco");
   const esperadoAhorro = arranqueAhorro + calcBolsillo("ahorro");
+  const esperadoDolares= arranqueDolares+ calcBolsillo("dolares");
+  // Dólares queda AFUERA del total en pesos a propósito -- mezclar monedas en una sola suma
+  // no tiene sentido (el valor en pesos de esos dólares cambia todos los días solo por TC,
+  // sin que haya pasado nada real). Se reconcilia aparte, en USD.
   const esperadoTotal  = esperadoCaja + esperadoMP + esperadoBanco + esperadoAhorro;
 
   // Totales informativos del período completo (para mostrar desglose) — misma atribución real por billetera
@@ -7431,12 +7448,14 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
   const realMP     = parseFloat(saldoMP)||0;
   const realBanco  = parseFloat(saldoBanco)||0;
   const realAhorro = parseFloat(saldoAhorro)||0;
+  const realDolares= parseFloat(saldoDolares)||0;
   const realTotal  = realCaja + realMP + realBanco + realAhorro;
 
   const diffCaja   = realCaja   - esperadoCaja;
   const diffMP     = realMP     - esperadoMP;
   const diffBanco  = realBanco  - esperadoBanco;
   const diffAhorro = realAhorro - esperadoAhorro;
+  const diffDolares= realDolares- esperadoDolares;
   const diffTotal  = realTotal  - esperadoTotal;
 
   const fecha = fechaAhora;
@@ -7446,7 +7465,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
     const{error}=await supabase.from("cierres_caja").insert({
       fecha,
       saldo_caja_chica: realCaja, saldo_mp: realMP,
-      saldo_banco: realBanco, saldo_ahorro: realAhorro,
+      saldo_banco: realBanco, saldo_ahorro: realAhorro, saldo_dolares: realDolares,
       ventas_efectivo: vEfectivo, ventas_transferencia: vBanco,
       ventas_mp: vMP, ventas_debito: 0,
       ventas_credito: 0, ventas_cuenta_corriente: vCC,
@@ -7459,27 +7478,48 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
     if(error){toast.err("Error al guardar cierre");setLoading(false);return;}
     toast.ok("Cierre guardado");
     setLoading(false);
-    setCajChica(""); setSaldoMP(""); setSaldoBanco(""); setSaldoAhorro(""); setNotas("");
+    setCajChica(""); setSaldoMP(""); setSaldoBanco(""); setSaldoAhorro(""); setSaldoDolares(""); setNotas("");
     cargarTodo();
     setTab("historial");
   }
 
+  // Un movimiento "cruza moneda" cuando exactamente uno de los dos lados es el bolsillo
+  // Dólares -- ahí "monto" (lo que sale del origen) y lo que entra al destino son montos
+  // distintos, unidos por el tipo de cambio que se tipea a mano.
+  const movCruzaMoneda = (movOrigen==="dolares") !== (movDestino==="dolares");
+
   async function guardarMovimiento(){
     if(!movMonto||movOrigen===movDestino){toast.err("Revisá los datos del movimiento");return;}
+    if(movCruzaMoneda && !(parseFloat(movTC)>0)){toast.err("Ingresá el tipo de cambio");return;}
     setLoadingMov(true);
+    const monto = parseFloat(movMonto)||0;
+    const tc = parseFloat(movTC)||0;
+    // Comprando dólares (origen pesos -> destino dolares): destino = pesos/TC, en USD (2 decimales).
+    // Vendiendo dólares (origen dolares -> destino pesos): destino = USD*TC, redondeado a pesos.
+    const montoDestino = !movCruzaMoneda ? monto
+      : (movDestino==="dolares" ? Math.round((monto/tc)*100)/100 : Math.round(monto*tc));
     await supabase.from("movimientos_caja").insert({
       fecha:fechaAhora, origen:movOrigen, destino:movDestino,
-      monto:parseFloat(movMonto)||0, concepto:movConcepto,
+      monto, monto_destino:montoDestino, tipo_cambio: movCruzaMoneda?tc:null,
+      concepto:movConcepto,
     });
     toast.ok("Movimiento registrado");
     setLoadingMov(false);
     setModalMov(false);
-    setMovMonto("");setMovConcepto("");
+    setMovMonto("");setMovTC("");setMovConcepto("");
     cargarTodo();
   }
 
   const diffColor=(d)=>d===0?G.textoSec:d>0?G.verde:G.rojo;
-  const diffLabel=(d)=>d===0?"✓ Cuadra":d>0?`+${fmt(d)} sobrante`:`${fmt(d)} faltante`;
+  const diffLabel=(d,f=fmt)=>d===0?"✓ Cuadra":d>0?`+${f(d)} sobrante`:`${f(d)} faltante`;
+  // Texto de un movimiento entre bolsillos, mostrando ambos lados con su propia moneda cuando
+  // cruza pesos<->dolares (m.tipo_cambio viene cargado); si no cruza, un solo monto normal.
+  const fmtMovimiento = (m) => {
+    const fOrigen  = m.origen ==="dolares" ? fmtUSD : fmt;
+    const fDestino = m.destino==="dolares" ? fmtUSD : fmt;
+    if(m.tipo_cambio>0) return `${fOrigen(m.monto)} → ${fDestino(m.monto_destino??m.monto)} (TC ${fmtNum(m.tipo_cambio)})`;
+    return fDestino(m.monto_destino??m.monto);
+  };
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -7594,7 +7634,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
           movs.push({
             id:`me-${m.id}`, fecha:m.fecha, tipo:"movimiento",
             concepto:m.concepto||`${BOLSILLOS.find(b=>b.key===m.origen)?.label} → ${BOLSILLOS.find(b=>b.key===m.destino)?.label}`,
-            metodo:"Interno", monto:m.monto,
+            metodo:"Interno", monto:m.monto, monto_destino:m.monto_destino, tipo_cambio:m.tipo_cambio,
             billetera:`${m.origen}→${m.destino}`,
             origen:"Movimiento interno",
           });
@@ -7629,8 +7669,8 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
         movs.sort((a,b)=>b.fecha>a.fecha?1:b.fecha<a.fecha?-1:0);
 
         // ── Filtros ──
-        const billeterasOpts = ["Todas","caja_chica","mp","banco","ahorro"];
-        const billeteraLabel = {caja_chica:"Caja Chica",mp:"Mercado Pago",banco:"Banco",ahorro:"Ahorro",Todas:"Todas"};
+        const billeterasOpts = ["Todas","caja_chica","mp","banco","ahorro","dolares"];
+        const billeteraLabel = {caja_chica:"Caja Chica",mp:"Mercado Pago",banco:"Banco",ahorro:"Ahorro",dolares:"Dólares",Todas:"Todas"};
 
         const filtrados2 = movs.filter(m=>{
           if(lmDesde && m.fecha < lmDesde) return false;
@@ -7714,7 +7754,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                       </div>
                     </div>
                     <div style={{fontFamily:"DM Mono,monospace",fontWeight:700,fontSize:14,color:esMovimiento?G.azul:esIngreso?G.verde:G.rojo,whiteSpace:"nowrap"}}>
-                      {esMovimiento?"":esIngreso?"+":"-"}{fmt(m.monto)}
+                      {esMovimiento?fmtMovimiento(m):`${esIngreso?"+":"-"}${fmt(m.monto)}`}
                     </div>
                   </div>
                 );
@@ -7801,10 +7841,11 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                   {l:"MP",         v:arranqueMP},
                   {l:"Banco",      v:arranqueBanco},
                   {l:"Ahorro",     v:arranqueAhorro},
+                  {l:"Dólares",    v:arranqueDolares, usd:true},
                 ].map(x=>(
                   <div key={x.l} style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
                     <span style={{color:G.textoSec}}>{x.l}</span>
-                    <span style={{fontFamily:"DM Mono,monospace",fontWeight:600}}>{fmt(x.v)}</span>
+                    <span style={{fontFamily:"DM Mono,monospace",fontWeight:600}}>{x.usd?fmtUSD(x.v):fmt(x.v)}</span>
                   </div>
                 ))}
               </div>
@@ -7817,10 +7858,11 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                 <Fi label="Mercado Pago" value={saldoMP} onChange={setSaldoMP} type="number" placeholder="0"/>
                 <Fi label="Banco" value={saldoBanco} onChange={setSaldoBanco} type="number" placeholder="0"/>
                 <Fi label="Ahorro (caja de seguridad)" value={saldoAhorro} onChange={setSaldoAhorro} type="number" placeholder="0"/>
+                <Fi label="Dólares (USD)" value={saldoDolares} onChange={setSaldoDolares} type="number" step="0.01" placeholder="0"/>
               </div>
             </Card>
 
-            {(cajChica||saldoMP||saldoBanco||saldoAhorro)&&(
+            {(cajChica||saldoMP||saldoBanco||saldoAhorro||saldoDolares)&&(
               <Card>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                   <ST style={{margin:0}}>Diferencias (real vs esperado)</ST>
@@ -7838,21 +7880,26 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                       det:`Arranque ${fmt(arranqueBanco)} + ventas banco ${fmt(vBanco)}${cobDeudaBanco>0?` + cobros deuda banco ${fmt(cobDeudaBanco)}`:""}${gBancoTot>0?` − gastos banco ${fmt(gBancoTot)}`:""}${reembDeudaBanco>0?` − reembolsos banco ${fmt(reembDeudaBanco)}`:""}${devBanco>0?` − devoluciones banco ${fmt(devBanco)}`:""}${descBancoDesde>0?` + descuentos banco ${fmt(descBancoDesde)}`:""}${movNetoBanco!==0?` ${movNetoBanco>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoBanco))}`:""}`},
                     {l:"Ahorro",      esp:esperadoAhorro, real:realAhorro, diff:diffAhorro,
                       det:`Arranque ${fmt(arranqueAhorro)}${movNetoAhorro!==0?` ${movNetoAhorro>0?"+":"−"} movimientos ${fmt(Math.abs(movNetoAhorro))}`:" + traspasos entre bolsillos (sin movimientos)"}`},
-                  ].map(x=>(
+                    {l:"Dólares",     esp:esperadoDolares, real:realDolares, diff:diffDolares, usd:true,
+                      det:`Arranque ${fmtUSD(arranqueDolares)}${movNetoDolares!==0?` ${movNetoDolares>0?"+":"−"} movimientos ${fmtUSD(Math.abs(movNetoDolares))}`:" (sin movimientos) — no suma a la diferencia total en pesos"}`},
+                  ].map(x=>{
+                    const f = x.usd?fmtUSD:fmt;
+                    return(
                     <div key={x.l} style={{background:G.sup2,borderRadius:8,padding:"10px 14px"}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                         <span style={{fontSize:12,fontWeight:600}}>{x.l}</span>
                         <span style={{fontSize:13,fontWeight:700,color:diffColor(x.diff)}}>
-                          {diffLabel(x.diff)}
+                          {diffLabel(x.diff,f)}
                         </span>
                       </div>
                       <div style={{fontSize:11,color:G.textoSec,marginBottom:4}}>{x.det}</div>
                       <div style={{display:"flex",gap:16,fontSize:11,color:G.textoSec}}>
-                        <span>Esperado: <strong style={{color:G.texto}}>{fmt(x.esp)}</strong></span>
-                        <span>Real: <strong style={{color:G.texto}}>{fmt(x.real)}</strong></span>
+                        <span>Esperado: <strong style={{color:G.texto}}>{f(x.esp)}</strong></span>
+                        <span>Real: <strong style={{color:G.texto}}>{f(x.real)}</strong></span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   <div style={{borderTop:`1px solid ${G.borde}`,paddingTop:10,marginTop:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                     <div>
                       <span style={{fontSize:13,fontWeight:600}}>Diferencia total</span>
@@ -7909,19 +7956,23 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                   </div>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,textAlign:"center"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,textAlign:"center"}}>
                     {[
-                      {l:"Caja",   v:c.saldo_caja_chica, d:c.diff_caja_chica},
-                      {l:"MP",     v:c.saldo_mp,         d:c.diff_mp},
-                      {l:"Banco",  v:c.saldo_banco,      d:c.diff_banco},
-                      {l:"Ahorro", v:c.saldo_ahorro,     d:null},
-                    ].map(x=>(
+                      {l:"Caja",    v:c.saldo_caja_chica, d:c.diff_caja_chica},
+                      {l:"MP",      v:c.saldo_mp,         d:c.diff_mp},
+                      {l:"Banco",   v:c.saldo_banco,      d:c.diff_banco},
+                      {l:"Ahorro",  v:c.saldo_ahorro,     d:null},
+                      {l:"Dólares", v:c.saldo_dolares,    d:null, usd:true},
+                    ].map(x=>{
+                      const f = x.usd?fmtUSD:fmt;
+                      return(
                       <div key={x.l} style={{background:G.sup2,borderRadius:8,padding:"8px 12px"}}>
                         <div style={{fontSize:10,color:G.textoSec,marginBottom:2}}>{x.l}</div>
-                        <div style={{fontSize:13,fontWeight:600,fontFamily:"DM Mono,monospace"}}>{fmt(x.v)}</div>
-                        {x.d!==null&&<div style={{fontSize:10,color:x.d===0?G.verde:x.d>0?G.verde:G.rojo}}>{x.d===0?"✓":x.d>0?`+${fmt(x.d)}`:fmt(x.d)}</div>}
+                        <div style={{fontSize:13,fontWeight:600,fontFamily:"DM Mono,monospace"}}>{f(x.v)}</div>
+                        {x.d!==null&&<div style={{fontSize:10,color:x.d===0?G.verde:x.d>0?G.verde:G.rojo}}>{x.d===0?"✓":x.d>0?`+${f(x.d)}`:f(x.d)}</div>}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8,background:G.sup2,borderRadius:8,padding:"6px 14px"}}>
                     <span style={{fontSize:11,color:G.textoSec}}>Diferencia total</span>
@@ -7938,7 +7989,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
                   {movimientosDeEsteCierre.map(m=>(
                     <div key={m.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"3px 0",color:G.textoSec}}>
                       <span>{BOLSILLOS.find(b=>b.key===m.origen)?.label||m.origen} → {BOLSILLOS.find(b=>b.key===m.destino)?.label||m.destino}{m.concepto?` · ${m.concepto}`:""}</span>
-                      <span style={{fontFamily:"DM Mono,monospace",color:G.azul}}>{fmt(m.monto)}</span>
+                      <span style={{fontFamily:"DM Mono,monospace",color:G.azul}}>{fmtMovimiento(m)}</span>
                     </div>
                   ))}
                 </div>
@@ -7951,7 +8002,7 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
 
       {modalMov&&(
         <Modal title="Registrar movimiento entre bolsillos" onClose={()=>setModalMov(false)}
-          footer={<><Btn variant="secondary" onClick={()=>setModalMov(false)}>Cancelar</Btn><Btn disabled={loadingMov||!movMonto||movOrigen===movDestino} onClick={guardarMovimiento}>{loadingMov?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Guardando</span>:"Registrar"}</Btn></>}>
+          footer={<><Btn variant="secondary" onClick={()=>setModalMov(false)}>Cancelar</Btn><Btn disabled={loadingMov||!movMonto||movOrigen===movDestino||(movCruzaMoneda&&!(parseFloat(movTC)>0))} onClick={guardarMovimiento}>{loadingMov?<span style={{display:"flex",alignItems:"center",gap:6}}><Spinner/>Guardando</span>:"Registrar"}</Btn></>}>
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             <div style={{background:G.sup2,borderRadius:8,padding:"10px 14px",fontSize:12,color:G.textoSec}}>
               Fecha: {fecha}
@@ -7961,8 +8012,18 @@ function ModuloCaja({ventas,egresos,pagosEgreso=[],descuentosEgreso=[],devolucio
               <Fi label="Destino" value={movDestino} onChange={setMovDestino} options={BOLSILLOS.map(b=>({value:b.key,label:b.label}))}/>
             </div>
             {movOrigen===movDestino&&<div style={{fontSize:12,color:G.rojo}}>El origen y destino no pueden ser iguales</div>}
-            <Fi label="Monto ($)" value={movMonto} onChange={setMovMonto} type="number" placeholder="0"/>
-            <Fi label="Concepto (opcional)" value={movConcepto} onChange={setMovConcepto} placeholder="Ej: depósito del día"/>
+            <Fi label={`Monto (${movOrigen==="dolares"?"USD":"$"})`} value={movMonto} onChange={setMovMonto} type="number" step={movOrigen==="dolares"?"0.01":"1"} placeholder="0"/>
+            {movCruzaMoneda&&(<>
+              <Fi label="Tipo de cambio" value={movTC} onChange={setMovTC} type="number" step="0.01" placeholder="Ej: 1520"/>
+              {parseFloat(movMonto)>0&&parseFloat(movTC)>0&&(
+                <div style={{fontSize:12,color:G.textoSec,background:G.sup2,borderRadius:6,padding:"6px 10px"}}>
+                  {movDestino==="dolares"
+                    ? <>≈ <strong style={{color:G.verde}}>{fmtUSD(parseFloat(movMonto)/parseFloat(movTC))}</strong> van a entrar a Dólares</>
+                    : <>≈ <strong style={{color:G.verde}}>{fmt(parseFloat(movMonto)*parseFloat(movTC))}</strong> van a entrar a {BOLSILLOS.find(b=>b.key===movDestino)?.label}</>}
+                </div>
+              )}
+            </>)}
+            <Fi label="Concepto (opcional)" value={movConcepto} onChange={setMovConcepto} placeholder="Ej: compra de dólares para ahorro"/>
           </div>
         </Modal>
       )}

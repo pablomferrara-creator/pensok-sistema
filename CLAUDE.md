@@ -314,6 +314,22 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Billetera Dólares en Cierre de Caja (2026-08-27)
+
+Pablo quiere empezar a ahorrar en dólares. Se agregó un 5to "bolsillo" al Cierre de Caja, junto a Caja Chica/MP/Banco/Ahorro (`BOLSILLOS` en [App.jsx](src/App.jsx), cerca de `ModuloCaja`).
+
+- **`dolares` es un bolsillo llevado en USD, no en pesos** — a propósito no se mezcla con el total general en pesos (`esperadoTotal`/`realTotal`), porque el valor en pesos de esos dólares cambia todos los días solo por el tipo de cambio, sin que haya pasado nada real en la caja. Se reconcilia aparte (arranque + movimientos en USD = esperado, Pablo cuenta los billetes físicos y compara), con su propia card en "Diferencias" y su propia columna en el historial de cierres — pero fuera de la "Diferencia total".
+- **La compra/venta de dólares se hace con el mismo mecanismo de "Registrar movimiento entre bolsillos" que ya existía** (tabla `movimientos_caja`), extendido para poder cruzar de moneda:
+  - `monto`: lo que SALE del bolsillo origen, en la moneda del origen (pesos, o USD si el origen es Dólares).
+  - `monto_destino`: lo que ENTRA al bolsillo destino, en la moneda del destino. Si el movimiento no cruza moneda (ej. Caja Chica → Banco), es igual a `monto` — por eso en todos los cálculos hay un fallback `m.monto_destino ?? m.monto` para no romper los movimientos viejos (que no tienen esta columna cargada).
+  - `tipo_cambio`: solo se carga cuando el movimiento cruza pesos↔dólares — Pablo lo tipea a mano en el modal (no hay cotización automática acá, a diferencia de Makinthal/BNA). Sirve de referencia/auditoría, no participa en ningún otro cálculo.
+  - **Comprar dólares**: origen = billetera en pesos, destino = "Dólares". `monto_destino = round(monto/TC, 2 decimales)`.
+  - **Vender dólares** (dejado armado a pedido de Pablo, aunque hoy no se usa activamente): origen = "Dólares", destino = billetera en pesos. `monto_destino = round(monto*TC)`.
+  - El modal "Registrar movimiento" muestra el campo de TC y un preview en vivo del monto resultante solo cuando el origen o el destino es Dólares (`movCruzaMoneda` = exactamente uno de los dos lados es `"dolares"`).
+- El Libro de movimientos y el detalle de cada cierre muestran ambos lados del movimiento cuando cruza moneda (`fmtMovimiento`, ej. `"$50.000 → U$D 32,89 (TC 1.520)"`), en vez de un solo monto como antes.
+- **No hay edición/eliminación de movimientos** (ni para este caso ni para los movimientos comunes preexistentes) — si hace falta corregir uno cargado mal, es una mejora aparte, no incluida acá. Por ahora, corregirlo a mano con un segundo movimiento inverso o directamente en la base.
+- `sql/2026-08-27-billetera-dolares.sql`: `caja_config.saldo_dolares`, `cierres_caja.saldo_dolares`, `movimientos_caja.monto_destino`/`tipo_cambio` — ver `sql/CHANGELOG.md`.
+
 ## Auto-actualización diaria del TC de Makinthal (dólar BNA) (2026-08-26)
 
 El mail donde Makinthal manda su lista aclara que hay que usar "el tipo de cambio BNA Billete vendedor". A pedido de Pablo, el sistema ahora **actualiza solo** el tipo de cambio y los precios de los productos de Makinthal, sin que haga falta tocar nada manualmente:
