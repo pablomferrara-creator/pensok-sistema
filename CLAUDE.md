@@ -314,6 +314,13 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Responsable automático en tareas auto-creadas (2026-08-27)
+
+Dos tareas que crea el propio sistema quedaban sin `responsable` asignado — Pablo pidió que no, porque una tarea sin dueño en la práctica no la hace nadie.
+
+- **"Cargar en Abastecimiento" (al registrar un egreso con `es_compra_productos`)**: ahora se le asigna como responsable a **quien está logueado en ese momento** — `registrarEgreso` (en `useData`) recibe `usuarioEmail` (nuevo 2do parámetro del hook, `useData(toast, session?.user?.email||"")`) y lo resuelve a un nombre de vendedor con `miNombreActual()`, mismo criterio de matcheo por email que ya usaban `ModuloTareas`/`ModuloPresupuestos`/`ModuloControlStock` (busca en `vendedores` y `vendedoresOtro` por email, case-insensitive). Si no matchea ningún vendedor, cae al email crudo antes que dejarlo sin nadie.
+- **"Control de stock mensual" (tarea automática mensual, `asegurarTareasControlStockMensual`)**: responsable **fijo** por local — `RESPONSABLE_CONTROL_STOCK = {pilar:"Fabri", camanio:"Pato"}`, a pedido explícito de Pablo. No depende de quién esté logueado.
+
 ## Billetera Dólares en Cierre de Caja (2026-08-27)
 
 Pablo quiere empezar a ahorrar en dólares. Se agregó un 5to "bolsillo" al Cierre de Caja, junto a Caja Chica/MP/Banco/Ahorro (`BOLSILLOS` en [App.jsx](src/App.jsx), cerca de `ModuloCaja`).

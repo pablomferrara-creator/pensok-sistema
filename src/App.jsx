@@ -423,7 +423,7 @@ function PantallaLogin({onLogin}){
 // ============================================================
 // HOOK: useSupabase — carga todos los datos
 // ============================================================
-function useData(toast){
+function useData(toast, usuarioEmail=""){
   const [clientes,       setClientes]       = useState([]);
   const [productos,      setProductos]      = useState([]);
   const [ventas,         setVentas]         = useState([]);
@@ -779,6 +779,17 @@ function useData(toast){
     return true;
   }
 
+  // Resuelve el nombre de vendedor de quien está usando el sistema ahora mismo (por email de
+  // sesión, mismo criterio que ModuloTareas/ModuloPresupuestos/ModuloControlStock), para poder
+  // asignarle automáticamente tareas que crea el propio sistema.
+  function miNombreActual(){
+    const email=(usuarioEmail||"").trim().toLowerCase();
+    if(!email) return "";
+    const v=(vendedores||[]).find(v=>(v.email||"").trim().toLowerCase()===email)
+      || (vendedoresOtro||[]).find(v=>(v.email||"").trim().toLowerCase()===email);
+    return v?.nombre || "";
+  }
+
   // ── EGRESOS ──────────────────────────────────────────────
   async function registrarEgreso(eg){
     // El egreso siempre nace sin pagar — los pagos se registran por separado en pagos_egreso.
@@ -805,7 +816,7 @@ function useData(toast){
         await supabaseTareas.from("tareas").insert({
           titulo: `Cargar en Abastecimiento: ${eg.proveedor||"(sin proveedor)"} — ${fmt(data.monto)}`,
           descripcion: `Egreso #${data.id}: "${data.concepto}". Cargar los productos correspondientes desde Abastecimiento, vinculándolos a esta compra. Tildar cuando esté todo cargado.`,
-          responsable: null,
+          responsable: miNombreActual()||usuarioEmail||null,
           local: localKey,
           prioridad: "media",
           fecha_limite: hoy(),
@@ -1183,9 +1194,11 @@ function useData(toast){
   }
 
   // Tarea mensual automática de Control de Stock: si todavía no existe una para este mes
-  // y este local, se crea sin responsable asignado (cualquiera del equipo la puede tomar).
-  // Se llama al cargar la app (ver App > useEffect de asegurarTareasControlStockMensual).
+  // y este local, se crea con el responsable fijo de ese local (a pedido de Pablo, para que
+  // no quede sin dueño y termine sin hacerse). Se llama al cargar la app (ver App > useEffect
+  // de asegurarTareasControlStockMensual).
   const PROYECTO_CONTROL_STOCK = "Control de Stock (mensual)";
+  const RESPONSABLE_CONTROL_STOCK = {pilar:"Fabri", camanio:"Pato"};
   async function asegurarTareasControlStockMensual(){
     const mesActual = mesAct(); // "YYYY-MM"
     const [y,m] = mesActual.split("-").map(Number);
@@ -1208,7 +1221,7 @@ function useData(toast){
       const{error}=await supabaseTareas.from("tareas").insert({
         titulo: `Control de stock mensual — ${nombreMes} ${y}`,
         descripcion: "Contar el stock físico de todas las categorías del mes. Se puede hacer de a poco (una categoría por vez) desde Control de Stock.",
-        responsable: null,
+        responsable: RESPONSABLE_CONTROL_STOCK[loc]||null,
         local: loc,
         prioridad: "media",
         fecha_limite: fechaLimite,
@@ -9790,7 +9803,7 @@ export default function App(){
     });
   },[]);
 
-  const data = useData(toast);
+  const data = useData(toast, session?.user?.email||"");
 
   // Al cargar (y en cada auto-refresh), un admin dispara la creación de la tarea
   // mensual de Control de Stock si todavía no existe para este mes — ver useData.
