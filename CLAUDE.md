@@ -314,6 +314,16 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Totales mensuales históricos en el Dashboard (2026-08-27)
+
+El negocio usa el sistema recién desde marzo 2026 — todo lo anterior (y enero/febrero de este mismo año) aparece en $0 en el Dashboard porque no hay ventas/egresos cargados. Pablo pidió poder pasar los totales acumulados de cierre de cada mes viejo (sin cargar ingreso/egreso por ingreso/egreso) para poder ver la evolución y comparar con años anteriores.
+
+- **Tabla nueva `historico_mensual`**: `mes` (texto "YYYY-MM", único), `facturacion`, `ganancia_neta`, `gastos_fijos`, `gastos_variables`, `notas`. Se carga a mano vía psql cuando Pablo pasa los números — no tiene un formulario propio en la UI (si más adelante hace falta autogestionarlo sin pedírmelo a mí, es una mejora aparte).
+- **Regla de fallback, en `ModuloAnalisis`**: un mes usa su histórico **solo si no tiene absolutamente ningún dato vivo** (ni una venta ni un egreso cargado ese mes) — en cuanto un mes tiene aunque sea un registro real, ese real gana siempre y el histórico para ese mes se ignora. No hay mezcla ni promedios.
+- **Selector de año** (flechas ‹ › junto al botón "Este año"/`anioSel`): permite navegar a años anteriores completos en el periodo "Este año". Al mirar un año que no es el actual, todas las métricas de esa vista (Facturación, Ganancia, Gastos Fijos/Variables, top vendedores/productos/métodos de pago) se recalculan para `anioSel`, no para el año en curso.
+- **Ojo con el límite de filas cargadas**: `ventas` en memoria tiene tope de 8000 filas (ver `cargar()` en `useData`). Para el año actual, las métricas siguen usando `anioStats` (query sin límite, ya existía) + el aporte histórico de los meses sin nada vivo, así que no hay riesgo. Para un año **anterior** completo no hay todavía un query dedicado sin límite — se arma sumando los 12 meses desde lo ya cargado en memoria. Con el volumen actual del negocio esto es exacto, pero **si en el futuro el histórico de ventas real crece mucho, un año viejo con datos reales podría empezar a quedar mal calculado** (les caería el límite de filas) — ahí haría falta un query dedicado por año, igual al que ya existe para el año en curso.
+- La fila "Facturación Objetivo / Cumplimiento" se oculta al mirar un año anterior (es una proyección respecto de hoy, no tiene sentido en retrospectiva). El gráfico de "Evolución de facturación" marca las barras históricas con un patrón punteado semi-transparente distinto de las reales.
+
 ## Confirmación al eliminar un pago de egreso (2026-08-27)
 
 Pablo detectó un caso real: un pago de egreso ya cargado se borró por error (la cruz ✕ eliminaba directo, sin preguntar), y como resultado el egreso quedó con saldo pendiente falso — parecía que faltaba pagar $1.312.100 de un proveedor que en realidad ya estaba saldado.

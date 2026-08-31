@@ -445,6 +445,7 @@ function useData(toast, usuarioEmail=""){
   const [conteosStock,   setConteosStock]   = useState([]);
   const [historialValorStock, setHistorialValorStock] = useState([]);
   const [presupuestos, setPresupuestos] = useState([]);
+  const [historicoMensual, setHistoricoMensual] = useState([]); // [{mes:"YYYY-MM", facturacion, ganancia_neta, gastos_fijos, gastos_variables}]
   const [loading,        setLoading]        = useState(true);
 
   async function cargar(){
@@ -496,6 +497,12 @@ function useData(toast, usuarioEmail=""){
       const{data:preds}=await supabase.from("presupuestos").select("*, presupuesto_items(*)").order("creado_en",{ascending:false});
       setPresupuestos(preds||[]);
     }catch(e){ console.warn("No se pudieron cargar los presupuestos:",e); setPresupuestos([]); }
+    // Totales mensuales históricos (meses previos a que el negocio usara el sistema) —
+    // si la tabla aún no existe, queda vacío sin romper
+    try{
+      const{data:hm}=await supabase.from("historico_mensual").select("*").order("mes",{ascending:true});
+      setHistoricoMensual(hm||[]);
+    }catch(e){ console.warn("No se pudo cargar el histórico mensual:",e); setHistoricoMensual([]); }
     // Count real de ventas
     const{count}=await supabase.from("ventas").select("*",{count:"exact",head:true});
     setTotalVentas(count||0);
@@ -2085,19 +2092,21 @@ function useData(toast, usuarioEmail=""){
     return out.sort((a,b)=>a.localeCompare(b));
   },[vendedores,vendedoresOtro]);
 
-  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,editarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarTraspaso,eliminarTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote};
+  return{clientes,productos,ventasConItems,egresos,abastecimiento,vendedores,vendedoresOtro,proveedores,tipoCambio,totalVentas,totalNosDeben,anioStats,traspasos,pagosTraspaso,totalDeudaCamanio,deudaAPilar,pedidosWeb,pagosEgreso,loading,cargar,cargarPedidosWeb,aceptarPedidoWeb,rechazarPedidoWeb,registrarVenta,registrarDevolucion,devoluciones,registrarEgreso,marcarReembolsado,registrarPagoEgreso,eliminarPagoEgreso,editarPagoEgreso,guardarCliente,guardarProducto,registrarAbastecimiento,guardarVendedor,toggleVendedor,guardarProveedor,toggleProveedor,editarVenta,eliminarVenta,editarEgreso,eliminarEgreso,editarAbastecimiento,eliminarAbastecimiento,eliminarProducto,actualizarTipoCambio,actualizarPorcentaje,actualizarDesdeCSV,registrarTraspaso,registrarPagoTraspaso,editarTraspaso,eliminarTraspaso,editarPagoDeuda,eliminarPagoDeuda,tareas,responsables,guardarTarea,cambiarEstadoTarea,eliminarTarea,conteosStock,crearConteoStock,aplicarConteoStock,editarConteoStockItems,asegurarTareasControlStockMensual,historialValorStock,asegurarValorStockDiario,presupuestos,crearPresupuesto,aprobarPresupuesto,cancelarPresupuesto,editarPresupuestoItems,descuentosEgreso,registrarDescuentoEgreso,eliminarDescuentoEgreso,registrarAbastecimientoLote,historicoMensual};
 }
 
 // ============================================================
 // MODULO: ANALISIS / DASHBOARD
 // ============================================================
-function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],descuentosEgreso=[],pagosEgreso=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
+function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,totalDeudaCamanio,anioStats,devoluciones=[],descuentosEgreso=[],pagosEgreso=[],historicoMensual=[],onNavegar,onFiltroIngresos,onFiltroEgresos}){
   const hoyStr=hoy();const mesAct_=mesAct();const anio=new Date().getFullYear().toString();
   const [periodo,setPeriodo]=useState("mes"); // "hoy"|"dia"|"mes"|"mesEsp"|"anio"
   const [paretoOpen,setParetoOpen]=useState(false);
   const [paretoTipo,setParetoTipo]=useState("cantidad"); // "cantidad" | "ganancia"
   const [diaEsp,setDiaEsp]=useState(hoyStr);
   const [mesEsp,setMesEsp]=useState(mesAct_);
+  const [anioSel,setAnioSel]=useState(anio); // año que se está mirando en periodo "anio" (puede ser uno anterior)
+  const anioEsActual = anioSel===anio;
 
   // ── Prefijo activo para filtros ──
   const prefijoDia  = periodo==="hoy"?hoyStr:diaEsp;
@@ -2108,26 +2117,97 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
     ? ventas.filter(v=>v.fecha===prefijoDia)
     : periodo==="mes"||periodo==="mesEsp"
     ? ventas.filter(v=>v.fecha?.startsWith(prefijoMes))
-    : ventas.filter(v=>v.fecha?.startsWith(anio));
+    : ventas.filter(v=>v.fecha?.startsWith(anioSel));
 
   const eSel = periodo==="hoy"||periodo==="dia"
     ? egresos.filter(e=>e.fecha===prefijoDia)
     : periodo==="mes"||periodo==="mesEsp"
     ? egresos.filter(e=>e.fecha?.startsWith(prefijoMes))
-    : egresos.filter(e=>e.fecha?.startsWith(anio));
+    : egresos.filter(e=>e.fecha?.startsWith(anioSel));
 
   // Devoluciones del mismo período — su ganancia revertida se descuenta para no inflar los reportes
   const devSel = periodo==="hoy"||periodo==="dia"
     ? (devoluciones||[]).filter(d=>d.fecha===prefijoDia)
     : periodo==="mes"||periodo==="mesEsp"
     ? (devoluciones||[]).filter(d=>d.fecha?.startsWith(prefijoMes))
-    : (devoluciones||[]).filter(d=>d.fecha?.startsWith(anio));
+    : (devoluciones||[]).filter(d=>d.fecha?.startsWith(anioSel));
   const gananciaRevertidaSel = devSel.reduce((s,d)=>s+(d.ganancia_revertida||0),0);
 
+  // ── Histórico mensual (meses previos a marzo 2026, cuando el negocio empezó a usar el
+  // sistema): fallback SOLO para meses que no tengan absolutamente nada cargado (ni ventas
+  // ni egresos) -- si un mes ya tiene aunque sea un registro real, ese real gana siempre.
+  const MESES_LABEL=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  function mesTieneDatosVivos(mesStr){
+    return ventas.some(v=>v.fecha?.startsWith(mesStr)) || egresos.some(e=>e.fecha?.startsWith(mesStr));
+  }
+  function historicoDelMes(mesStr){
+    return (historicoMensual||[]).find(h=>h.mes===mesStr) || null;
+  }
+  // Agregado histórico de los meses de un año que no tienen NADA vivo -- se sirve para sumar
+  // encima de un total ya calculado sin duplicar meses que sí tienen datos reales.
+  function historicoDeMesesVacios(anioStr){
+    let facturacion=0,ganancia=0,gastosFijos=0,gastosVar=0;
+    for(let m=1;m<=12;m++){
+      const mesStr=anioStr+"-"+String(m).padStart(2,"0");
+      if(mesTieneDatosVivos(mesStr)) continue;
+      const h=historicoDelMes(mesStr);
+      if(h){ facturacion+=h.facturacion||0; ganancia+=h.ganancia_neta||0; gastosFijos+=h.gastos_fijos||0; gastosVar+=h.gastos_variables||0; }
+    }
+    return {facturacion,ganancia,gastosFijos,gastosVar};
+  }
+  // Los 12 meses de un año, cada uno con su dato real si existe o el histórico si no -- lo usa
+  // el gráfico de evolución, y también las métricas cuando se está mirando un año que NO es el
+  // actual (para el año actual, las métricas usan anioStats + historicoDeMesesVacios más abajo,
+  // que evita el límite de filas cargadas en memoria -- ver nota en esa parte).
+  function mesesDelAnio(anioStr){
+    const out=[];
+    for(let m=1;m<=12;m++){
+      const mesStr=anioStr+"-"+String(m).padStart(2,"0");
+      const vMes=ventas.filter(v=>v.fecha?.startsWith(mesStr));
+      const eMes=egresos.filter(e=>e.fecha?.startsWith(mesStr));
+      if(vMes.length>0||eMes.length>0){
+        out.push({
+          label:MESES_LABEL[m-1], mes:mesStr, historico:false,
+          facturacion:vMes.reduce((s,v)=>s+(v.total||0),0),
+          ganancia:vMes.reduce((s,v)=>s+(v.ganancia||0),0),
+          gastosFijos:eMes.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0),0),
+          gastosVar:eMes.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0),0),
+          cantVentas:vMes.length,
+        });
+      } else {
+        const h=historicoDelMes(mesStr);
+        out.push({
+          label:MESES_LABEL[m-1], mes:mesStr, historico:!!h,
+          facturacion:h?.facturacion||0, ganancia:h?.ganancia_neta||0,
+          gastosFijos:h?.gastos_fijos||0, gastosVar:h?.gastos_variables||0,
+          cantVentas:0,
+        });
+      }
+    }
+    return out;
+  }
+
   // ── Metricas ──
-  const facturacion  = periodo==="anio" ? anioStats.facturacion : vSel.reduce((s,v)=>s+(v.total||0),0);
-  const gananciaNeta = (periodo==="anio" ? anioStats.ganancia    : vSel.reduce((s,v)=>s+(v.ganancia||0),0)) - gananciaRevertidaSel;
-  const cantVentas   = periodo==="anio" ? anioStats.cantidad    : vSel.length;
+  // Para "Este año" (el año en curso) se sigue usando anioStats para facturación/ganancia/
+  // cantidad -- viene de un query sin límite de filas (ver useData > cargar), a diferencia de
+  // `ventas`, que sí tiene un tope de 8000 filas cargadas en memoria. Se le suma el aporte de
+  // los meses de ESTE año que no tengan nada vivo (Ene/Feb 2026, hoy). Para un año anterior
+  // completo no hay un query equivalente sin límite todavía, así que se arma sumando los 12
+  // meses (mesesDelAnio) desde lo ya cargado en memoria -- soporta bien el volumen actual del
+  // negocio; si en el futuro el histórico de ventas crece mucho, esto podría necesitar su
+  // propio query dedicado, igual que ya tiene el año actual.
+  const histVaciosAnio = periodo==="anio" ? historicoDeMesesVacios(anioSel) : {facturacion:0,ganancia:0,gastosFijos:0,gastosVar:0};
+  const mesesAnioSel = periodo==="anio" ? mesesDelAnio(anioSel) : [];
+
+  const facturacion  = periodo==="anio"
+    ? (anioEsActual ? anioStats.facturacion+histVaciosAnio.facturacion : mesesAnioSel.reduce((s,m)=>s+m.facturacion,0))
+    : vSel.reduce((s,v)=>s+(v.total||0),0);
+  const gananciaNeta = (periodo==="anio"
+    ? (anioEsActual ? anioStats.ganancia+histVaciosAnio.ganancia : mesesAnioSel.reduce((s,m)=>s+m.ganancia,0))
+    : vSel.reduce((s,v)=>s+(v.ganancia||0),0)) - gananciaRevertidaSel;
+  const cantVentas   = periodo==="anio"
+    ? (anioEsActual ? anioStats.cantidad : mesesAnioSel.reduce((s,m)=>s+m.cantVentas,0))
+    : vSel.length;
   const pctGanancia=facturacion>0?Math.round(gananciaNeta/facturacion*100):0;
   const ticketProm=cantVentas>0?Math.round(facturacion/cantVentas):0;
   // Neto de descuentos de proveedor recibidos sobre ese egreso (ej. descuento por pronto
@@ -2136,8 +2216,10 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   // Comisiones de plataforma pagadas al saldar ese egreso -- al revés que el descuento,
   // suman: el costo real fue mayor al nominal porque la plataforma cobró de más por pagar así.
   const comisionXEgreso = id => pagosEgreso.filter(p=>p.egreso_id===id).reduce((s,p)=>s+(p.comision_plataforma||0),0);
-  const gastosFijos=eSel.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id)+comisionXEgreso(e.id),0);
-  const gastosVar=eSel.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id)+comisionXEgreso(e.id),0);
+  // eSel (egresos) nunca tiene tope de filas, así que gastosFijos/gastosVar no necesitan
+  // distinguir año actual de uno anterior -- solo sumarle el histórico de los meses vacíos.
+  const gastosFijos=eSel.filter(e=>e.tipo==="Gasto fijo").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id)+comisionXEgreso(e.id),0) + (periodo==="anio"?histVaciosAnio.gastosFijos:0);
+  const gastosVar=eSel.filter(e=>e.tipo==="Gasto variable").reduce((s,e)=>s+(e.monto||0)-descXEgreso(e.id)+comisionXEgreso(e.id),0) + (periodo==="anio"?histVaciosAnio.gastosVar:0);
   const gananciaReal=gananciaNeta-gastosFijos;
   const pctGananciaReal=facturacion>0?Math.round(gananciaReal/facturacion*100):0;
 
@@ -2204,7 +2286,7 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
   // abastecieron (stock negativo) -- se muestra aparte, nunca restando de valorStock.
   const pendienteAbastecer=productos.reduce((s,p)=>s+precioARS(p.costo,p.moneda)*Math.max(0,-p.stock),0);
 
-  const labelPeriodo=periodo==="hoy"?"Hoy":periodo==="dia"?diaEsp:periodo==="mes"?"Este mes":periodo==="mesEsp"?mesEsp:"Este año";
+  const labelPeriodo=periodo==="hoy"?"Hoy":periodo==="dia"?diaEsp:periodo==="mes"?"Este mes":periodo==="mesEsp"?mesEsp:(anioEsActual?"Este año":anioSel);
 
   // ── FACTURACIÓN OBJETIVO ────────────────────────────────────
   // Calcula gastos fijos y % ganancia de un mes dado (formato "YYYY-MM")
@@ -2318,7 +2400,15 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
               style={{background:G.sup2,border:`1px solid ${G.verde}`,borderRadius:7,padding:"5px 8px",color:G.texto,fontSize:12,outline:"none"}}/>
           )}
         </div>
-        <button onClick={()=>setPeriodo("anio")} style={btnStyle(periodo==="anio")}>Este año</button>
+        <div style={{display:"flex",alignItems:"center",gap:4}}>
+          <button onClick={()=>setPeriodo("anio")} style={btnStyle(periodo==="anio")}>{anioEsActual?"Este año":anioSel}</button>
+          {periodo==="anio"&&(<>
+            <button onClick={()=>setAnioSel(String(parseInt(anioSel)-1))} title="Año anterior"
+              style={{background:G.sup2,color:G.textoSec,border:`1px solid ${G.borde}`,borderRadius:7,padding:"5px 9px",fontSize:12,cursor:"pointer"}}>‹</button>
+            <button onClick={()=>setAnioSel(String(parseInt(anioSel)+1))} disabled={anioEsActual} title="Año siguiente"
+              style={{background:G.sup2,color:anioEsActual?G.borde:G.textoSec,border:`1px solid ${G.borde}`,borderRadius:7,padding:"5px 9px",fontSize:12,cursor:anioEsActual?"default":"pointer"}}>›</button>
+          </>)}
+        </div>
         <span style={{fontSize:12,color:G.textoSec,marginLeft:4}}>{cantVentas} ventas</span>
       </div>
 
@@ -2338,7 +2428,9 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
         <MetricCard label="% Ganancia Real" value={`${pctGananciaReal}%`} color={pctGananciaReal>=20?G.verde:pctGananciaReal>=5?G.amarillo:G.rojo} sub="Ganancia Real / Facturación"/>
       </div>
 
-      {/* Fila 3: Facturación Objetivo */}
+      {/* Fila 3: Facturación Objetivo -- no aplica mirando un año anterior (es una proyección
+          respecto de hoy, no tiene sentido "cumplimiento de objetivo" en retrospectiva) */}
+      {!(periodo==="anio"&&!anioEsActual) && (
       <div className="psk-grid-3" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
         <MetricCard
           label={`Facturación Objetivo — ${labelPeriodo}`}
@@ -2362,6 +2454,7 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
           accent={gananciaReal>=0?"#00C48C22":"#FF4D6A22"}
         />
       </div>
+      )}
 
       {/* Grafico de evolución de facturación */}
       {(()=>{
@@ -2406,15 +2499,11 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
           }
 
         } else if(periodo==="anio"){
-          // Serie: facturación de cada mes del año
-          const mesesLabel=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-          for(let m=1;m<=12;m++){
-            const mesStr=anio+"-"+String(m).padStart(2,"0");
-            const total=ventas.filter(v=>v.fecha?.startsWith(mesStr)).reduce((s,v)=>s+(v.total||0),0);
-            puntos.push({label:mesesLabel[m-1], valor:total});
-          }
-          // Meta mensual = objetivo anual / 12
-          metaGranular = objetivo.sinDatos ? 0 : objetivo.valor/12;
+          // Serie: facturación de cada mes del año (real si hay, histórico si no -- ver mesesDelAnio)
+          puntos = mesesAnioSel.map(m=>({label:m.label, valor:m.facturacion, historico:m.historico}));
+          // Meta mensual = objetivo anual / 12 (el objetivo es siempre respecto de hoy, no tiene
+          // sentido mostrarlo mirando un año anterior)
+          metaGranular = (objetivo.sinDatos||!anioEsActual) ? 0 : objetivo.valor/12;
         }
 
         if(puntos.length===0) return null;
@@ -2441,6 +2530,7 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
               <div style={{display:"flex",gap:16,fontSize:11,color:G.textoSec,alignItems:"center"}}>
                 {meta>0&&<span style={{color:G.verde}}>┄ Objetivo: {fmt(Math.round(meta))}</span>}
                 <span style={{color:G.verde}}>■ Facturación</span>
+                {puntos.some(p=>p.historico)&&<span style={{opacity:0.6}}>▨ Histórico (cargado a mano)</span>}
               </div>
             </div>
             <div style={{overflowX:"auto"}}>
@@ -2469,8 +2559,8 @@ function ModuloAnalisis({ventas,egresos,productos,vendedores,totalNosDeben,total
                     ? (p.valor>=meta ? G.verde : p.valor>=meta*0.7 ? G.amarillo : G.rojo)
                     : G.verde;
                   return(
-                    <rect key={i} x={x} y={y} width={barW} height={h} fill={col} rx="2" opacity="0.9">
-                      <title>{p.label}: {fmt(p.valor)}{meta>0?" · Objetivo: "+fmt(Math.round(meta)):""}</title>
+                    <rect key={i} x={x} y={y} width={barW} height={h} fill={col} rx="2" opacity={p.historico?0.45:0.9} strokeDasharray={p.historico?"3,2":undefined} stroke={p.historico?col:undefined} strokeWidth={p.historico?1:undefined}>
+                      <title>{p.label}: {fmt(p.valor)}{p.historico?" (histórico)":""}{meta>0?" · Objetivo: "+fmt(Math.round(meta)):""}</title>
                     </rect>
                   );
                 })}
@@ -9957,7 +10047,7 @@ export default function App(){
           {data.loading&&modulo!=="venta"
             ?<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:12}}><Spinner/><span style={{color:G.textoSec}}>Cargando datos...</span></div>
             :(<>
-              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} descuentosEgreso={data.descuentosEgreso} pagosEgreso={data.pagosEgreso} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
+              {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} descuentosEgreso={data.descuentosEgreso} pagosEgreso={data.pagosEgreso} historicoMensual={data.historicoMensual} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
               {modulo==="valor_stock"    && <ModuloValorStock     historial={data.historialValorStock}/>}
               {modulo==="venta"          && <ModuloVenta          clientes={data.clientes} productos={data.productos} onRegistrar={data.registrarVenta} onCrearPresupuesto={data.crearPresupuesto} vendedores={data.vendedores} esAdmin={esAdmin} toast={toast}/>}
               {modulo==="presupuestos"   && <ModuloPresupuestos   presupuestos={data.presupuestos} productos={data.productos} onAprobar={data.aprobarPresupuesto} onCancelar={data.cancelarPresupuesto} onEditarItems={data.editarPresupuestoItems} vendedores={data.vendedores} vendedoresOtro={data.vendedoresOtro} esAdmin={esAdmin} usuarioEmail={session?.user?.email||""}/>}
