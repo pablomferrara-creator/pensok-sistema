@@ -314,6 +314,14 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Confirmación al eliminar un pago de egreso (2026-08-27)
+
+Pablo detectó un caso real: un pago de egreso ya cargado se borró por error (la cruz ✕ eliminaba directo, sin preguntar), y como resultado el egreso quedó con saldo pendiente falso — parecía que faltaba pagar $1.312.100 de un proveedor que en realidad ya estaba saldado.
+
+- **Investigado si era recuperable — no lo es.** `eliminarPagoEgreso` ([App.jsx:867](src/App.jsx:867)) hace un `delete()` directo sobre `pagos_egreso`, sin soft-delete ni tabla de auditoría, y además recalcula `monto_reembolsado`/`saldo_pendiente` en el egreso al momento — no queda ningún rastro en la app de la fecha/método del pago borrado. La única vía teórica sería un point-in-time-recovery de Supabase (si el plan lo tiene habilitado), pero restauraría **toda la base** a un momento pasado, no una fila puntual — completamente desproporcionado (se perderían todos los cambios hechos después, incluida buena parte de esta sesión). Se le recomendó a Pablo simplemente volver a cargar el pago a mano con la fecha/método que recuerde.
+- **Ambas cruces ✕ de "eliminar pago" en `ModuloEgresos`** (la del historial inline en la card del egreso y la del modal "Pagos") ahora abren un modal de confirmación (`confirmarElimPago`) en vez de borrar directo — mismo patrón que ya existía para eliminar un egreso completo (`confirmarElimEg`). El modal aclara texto explícito de que no hay forma de deshacerlo ni de recuperar el dato después.
+- No se tocó nada del lado de Ingresos/Ventas (`ModuloIngresos` ya tenía su propio confirm para "Eliminar cobro parcial" en un lugar, pero el ✕ inline de cobros seguía sin confirmar — quedó igual, fuera de alcance de este pedido puntual sobre egresos).
+
 ## Responsable automático en tareas auto-creadas (2026-08-27)
 
 Dos tareas que crea el propio sistema quedaban sin `responsable` asignado — Pablo pidió que no, porque una tarea sin dueño en la práctica no la hace nadie.

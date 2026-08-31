@@ -4419,6 +4419,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
   const [modalEdit,setModalEdit]=useState(false);
   const [editandoEg,setEditandoEg]=useState(null);
   const [confirmarElimEg,setConfirmarElimEg]=useState(null);
+  const [confirmarElimPago,setConfirmarElimPago]=useState(null); // pago (de un egreso) a confirmar antes de eliminar
   const [modalReemb,setModalReemb]=useState(null); // egreso a reembolsar
   const [reembMonto,setReembMonto]=useState("");
   const [reembMetodo,setReembMetodo]=useState("Efectivo");
@@ -4742,7 +4743,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                           <span>{p.metodo_pago}</span>
                           {p.notas&&<><span>·</span><span style={{fontStyle:"italic"}}>{p.notas}</span></>}
                           {esAdmin&&<button onClick={()=>{setModalPagos(e);abrirEditarPago(p);}} style={{background:"none",border:"none",color:G.textoSec,cursor:"pointer",fontSize:11,padding:"0 2px",lineHeight:1}} title="Editar este pago">✏️</button>}
-                          {esAdmin&&<button onClick={()=>onEliminarPago&&onEliminarPago(p.id)} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:12,padding:"0 2px",lineHeight:1}} title="Eliminar este pago">✕</button>}
+                          {esAdmin&&<button onClick={()=>setConfirmarElimPago(p)} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:12,padding:"0 2px",lineHeight:1}} title="Eliminar este pago">✕</button>}
                         </div>
                       ))}
                     </div>
@@ -4860,7 +4861,7 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
                       </div>
                       {esAdmin&&<div style={{display:"flex",gap:6}}>
                         <button onClick={()=>abrirEditarPago(p)} style={{background:"none",border:"none",color:G.textoSec,cursor:"pointer",fontSize:12,padding:4}} title="Editar este pago">✏️</button>
-                        <button onClick={async()=>{await onEliminarPago(p.id);}} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}} title="Eliminar este pago">✕</button>
+                        <button onClick={()=>setConfirmarElimPago(p)} style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:14,padding:4}} title="Eliminar este pago">✕</button>
                       </div>}
                     </div>
                   ))}
@@ -4987,6 +4988,16 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
           <div style={{fontSize:14,lineHeight:1.6}}>
             <p>Vas a eliminar <strong>{confirmarElimEg.concepto}</strong> del {confirmarElimEg.fecha} por <strong>{fmt(confirmarElimEg.monto)}</strong>.</p>
             <p style={{marginTop:8,color:G.rojo,fontSize:13}}>⚠ Esta accion no se puede deshacer.</p>
+          </div>
+        </Modal>
+      )}
+
+      {confirmarElimPago&&(
+        <Modal title="Eliminar pago" onClose={()=>setConfirmarElimPago(null)}
+          footer={<><Btn variant="secondary" onClick={()=>setConfirmarElimPago(null)}>Cancelar</Btn><Btn variant="danger" onClick={async()=>{await onEliminarPago(confirmarElimPago.id);setConfirmarElimPago(null);}}>Sí, eliminar</Btn></>}>
+          <div style={{fontSize:14,lineHeight:1.6}}>
+            <p>Vas a eliminar el pago de <strong>{fmt(confirmarElimPago.monto)}</strong> del {confirmarElimPago.fecha} ({confirmarElimPago.metodo_pago}).</p>
+            <p style={{marginTop:8,color:G.rojo,fontSize:13}}>⚠ Esta acción no se puede deshacer — el sistema no guarda historial de pagos eliminados.</p>
           </div>
         </Modal>
       )}
