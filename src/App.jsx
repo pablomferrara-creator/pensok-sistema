@@ -525,8 +525,8 @@ function useData(toast){
       if(localKey==="pilar") await autoActualizarMakinthalBNA();
     }
     init();
-    // Auto-refresh cada 30 minutos para mantener los datos actualizados
-    const interval = setInterval(init, 30 * 60 * 1000);
+    // Auto-refresh cada 1 hora para mantener los datos actualizados (antes cada 30min)
+    const interval = setInterval(init, 60 * 60 * 1000);
     return () => clearInterval(interval);
   },[]);
 
