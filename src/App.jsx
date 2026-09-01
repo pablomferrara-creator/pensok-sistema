@@ -3448,9 +3448,9 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
           }}>Continuar sin arena</Btn></>}>
         <p style={{fontSize:14,lineHeight:1.6}}>
           Estás {modalArena==="venta"?"cerrando esta venta":"generando este presupuesto"} con{" "}
-          <strong>{filtrosSinArenaEnCarrito().map(i=>i.nombre).join(", ")}</strong>{" "}
-          pero no hay ninguna arena en el carrito. Los filtros de arena no funcionan sin ella —
-          si el cliente ya tiene, todo bien, pero si no, después se termina quejando de que no se le avisó.
+          "<strong>{filtrosSinArenaEnCarrito().map(i=>i.nombre).join(", ")}</strong>" pero no hay
+          ninguna arena en el carrito. Los filtros de arena no funcionan sin ella. ¿El cliente ya
+          cuenta con la arena necesaria?
         </p>
       </Modal>
     )}
