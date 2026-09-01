@@ -3066,6 +3066,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
   const [loading,   setLoading]   = useState(false);
   const [genPres,   setGenPres]   = useState(false);
   const [ok,        setOk]        = useState(false);
+  const [modalArena,setModalArena]= useState(null); // "venta" | "presupuesto" | null
 
   // Metodo de pago cambia el descuento automaticamente
   function cambiarMetodo(nuevoMetodo){
@@ -3152,6 +3153,18 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
   const ganancia = calcGananciaItems(items,parseFloat(descuento)||0);
 
 
+  // Filtros de arena Vulcano (VC10/20/30/50) y Nataclor (V40/V50) -- se venden/cotizan seguido
+  // sin la arena que necesitan para funcionar, y después el cliente se queja de que no se le
+  // avisó. Si el carrito tiene alguno de estos filtros y ninguna arena, hay que preguntar antes
+  // de cerrar la venta o extraer el presupuesto (no bloquea, solo confirma).
+  const CODIGOS_FILTRO_ARENA = ["139010","139020","139030","139050","802400","802500"]; // Filtro VC10/20/30/50, Filtro Nataclor V40/V50
+  const CODIGOS_ARENA = ["T503F","1134","1134A"]; // Arena entrefina / fina / gruesa
+  function filtrosSinArenaEnCarrito(){
+    const codigosCarrito = items.map(i=>productos.find(p=>p.id===i.productoId)?.codigo).filter(Boolean);
+    if(codigosCarrito.some(c=>CODIGOS_ARENA.includes(c))) return []; // ya hay arena en el carrito, no hace falta preguntar
+    return items.filter(i=>CODIGOS_FILTRO_ARENA.includes(productos.find(p=>p.id===i.productoId)?.codigo));
+  }
+
   async function generarPresupuesto(){
     if(items.length===0||!vendedor)return;
     setGenPres(true);
@@ -3221,7 +3234,13 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
   }
 
   async function cerrarVenta(){
+    if(filtrosSinArenaEnCarrito().length>0){ setModalArena("venta"); return; }
     abrirModalPago();
+  }
+
+  async function generarPresupuestoCheck(){
+    if(filtrosSinArenaEnCarrito().length>0){ setModalArena("presupuesto"); return; }
+    generarPresupuesto();
   }
 
   if(ok)return(<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:360,gap:14}}><div style={{fontSize:44,color:G.verde}}>✓</div><div style={{fontSize:20,fontWeight:600,color:G.verde}}>Venta registrada</div><div style={{color:G.textoSec}}>Guardada en la base de datos</div></div>);
@@ -3415,11 +3434,26 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
         <Btn full className="psk-btn-full" disabled={items.length===0||loading||!vendedor} onClick={cerrarVenta} style={{marginTop:8,padding:"11px 0",fontSize:14}}>
           {loading?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Guardando...</span>:"Cerrar venta →"}
         </Btn>
-        <Btn full variant="secondary" disabled={items.length===0||genPres||!vendedor} onClick={generarPresupuesto} style={{marginTop:8,padding:"10px 0",fontSize:13}}>
+        <Btn full variant="secondary" disabled={items.length===0||genPres||!vendedor} onClick={generarPresupuestoCheck} style={{marginTop:8,padding:"10px 0",fontSize:13}}>
           {genPres?<span style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}><Spinner/>Generando...</span>:"📄 Extraer Presupuesto"}
         </Btn>
       </Card>
     </div>
+    {modalArena&&(
+      <Modal title="⚠ ¿Falta la arena?" onClose={()=>setModalArena(null)}
+        footer={<><Btn variant="secondary" onClick={()=>setModalArena(null)}>Volver y agregar</Btn>
+          <Btn variant="ghost" onClick={()=>{
+            const accion=modalArena; setModalArena(null);
+            if(accion==="venta") abrirModalPago(); else generarPresupuesto();
+          }}>Continuar sin arena</Btn></>}>
+        <p style={{fontSize:14,lineHeight:1.6}}>
+          Estás {modalArena==="venta"?"cerrando esta venta":"generando este presupuesto"} con{" "}
+          <strong>{filtrosSinArenaEnCarrito().map(i=>i.nombre).join(", ")}</strong>{" "}
+          pero no hay ninguna arena en el carrito. Los filtros de arena no funcionan sin ella —
+          si el cliente ya tiene, todo bien, pero si no, después se termina quejando de que no se le avisó.
+        </p>
+      </Modal>
+    )}
     </>
   );
 }

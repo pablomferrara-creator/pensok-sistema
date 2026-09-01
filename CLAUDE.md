@@ -314,6 +314,17 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Recordatorio de arena al vender filtros (2026-08-27)
+
+Pablo pidió que al cerrar una venta o extraer un presupuesto en `ModuloVenta`, si el carrito tiene alguno de los filtros de arena (Vulcano VC10/20/30/50, Nataclor V40/V50) y **ninguna** arena cargada, el sistema pregunte antes de continuar — pasa que se venden/cotizan sin arena y el cliente después se queja de que no se le avisó.
+
+- Matcheo por `codigo`, no por nombre (más estable ante cambios de nombre del producto):
+  - Filtros que disparan la pregunta: `139010`/`139020`/`139030`/`139050` (Filtro VC10/20/30/50 Vulcano) y `802400`/`802500` (Filtro Nataclor V40/V50).
+  - Arenas que la desactivan si ya están en el carrito: `T503F` (Arena entrefina), `1134` (Arena fina), `1134A` (Arena gruesa).
+  - Códigos verificados iguales en Pilar y Caamaño.
+- No bloquea la venta — es un modal de confirmación (`modalArena`) con "Volver y agregar" (cierra el modal, no hace nada más) o "Continuar sin arena" (sigue con la acción original: `abrirModalPago()` o `generarPresupuesto()`, según de dónde vino).
+- El botón "Cerrar venta →" llama a `cerrarVenta()` (ahora chequea antes de abrir el modal de pago) y "📄 Extraer Presupuesto" ahora llama a un wrapper nuevo `generarPresupuestoCheck()` en vez de `generarPresupuesto()` directo — `generarPresupuesto()` en sí queda intacta, es la que dispara el modal cuando el usuario elige "Continuar sin arena".
+
 ## Fix: tarjetas de "Reembolsos pendientes" no filtraban de verdad (2026-08-27)
 
 En Egresos, las tarjetas "Kito"/"Pensok" de "💸 Reembolsos pendientes" al hacer click solo activaban `filtroP` (pagador) — pero el monto que muestra cada tarjeta es `pagador === X && reembolso_pendiente && !reembolsado` (ver `deudasPers`/`deudaPensok`), no solo pagador. Como "Pensok" es el pagador por defecto de casi todos los egresos, filtrar solo por pagador dejaba pasar prácticamente todo — la lista no se reducía a lo que la tarjeta representa, daba la sensación de que "resaltaba pero no filtraba". Ahora el click activa también `setFiltroReemb(true)` (el mismo toggle del filtro "Estado: Reembolsos pendientes"), y se desactiva junto con `filtroP` al volver a hacer click. `Btn Limpiar` de la barra de filtros no toca `filtroReemb` — sigue así, fuera de alcance de este fix puntual.
