@@ -314,6 +314,14 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Ingresos: "Limpiar todo" ya no muestra los 7600+ años de historial (2026-08-27)
+
+Desde que el límite de filas de Supabase se subió (ver sección de más abajo, "Solo 1000 filas..."), `ventas` carga las 7600+ filas reales en vez de quedarse corta en 1000 — y "Limpiar todo" en Ingresos vaciaba `fFecha` por completo, mostrando y renderizando el historial entero de una, lo que se sentía muy lento.
+
+- `filtrados` en `ModuloIngresos` ahora, **sin un día puntual elegido en el filtro de Fecha**, restringe a `anioActual` (año calendario en curso) en vez de a todo el historial. Con un día puntual elegido (`fFecha`), sigue sin ninguna restricción — se puede elegir cualquier fecha de cualquier año.
+- Solo cambia el comportamiento de **"Limpiar todo"** y de cualquier otro camino que deje `fFecha` vacío — el filtro por defecto al entrar al módulo (hoy, `fFecha=hoy()`) no cambió.
+- El cartel de conteo arriba de la lista ahora aclara "Ventas — {año}" en vez de dar a entender que se está mirando todo el historial.
+
 ## Recordatorio de arena al vender filtros (2026-08-27)
 
 Pablo pidió que al cerrar una venta o extraer un presupuesto en `ModuloVenta`, si el carrito tiene alguno de los filtros de arena (Vulcano VC10/20/30/50, Nataclor V40/V50) y **ninguna** arena cargada, el sistema pregunte antes de continuar — pasa que se venden/cotizan sin arena y el cliente después se queja de que no se le avisó.

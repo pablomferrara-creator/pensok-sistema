@@ -3763,6 +3763,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
     setLoadingPagos(false);
   }
 
+  const anioActual = new Date().getFullYear().toString();
   const fp = filtrosPersistentes||{vend:"Todos",met:"Todos",fecha:"",estado:"",cliente:"Todos"};
   const [fVend,       setFVRaw]        = useState(fp.vend);
   const [fMet,        setFMRaw]        = useState(fp.met);
@@ -4135,7 +4136,11 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   const filtrados=useMemo(()=>ventas.filter(v=>{
     if(fVend!=="Todos"&&v.vendedor!==fVend)return false;
     if(fMet!=="Todos"&&v.metodo_pago!==fMet)return false;
-    if(fFecha&&v.fecha!==fFecha)return false;
+    // Sin un día puntual elegido, se limita al año actual en vez de todo el historial (7600+
+    // ventas) -- así "Limpiar todo" no vuelve a tildar el navegador. Para ver un día de un año
+    // anterior, se elige puntual desde el filtro de Fecha, que sigue sin ninguna restricción.
+    if(fFecha){ if(v.fecha!==fFecha)return false; }
+    else if(!v.fecha?.startsWith(anioActual))return false;
     if(fEstado==="sinCobrar"&&v.cobrado)return false;
     if(fEstado==="sinEntregar"&&v.entregado)return false;
     if(fCliente!=="Todos"&&(v.cliente_nombre||"CONSUMIDOR FINAL")!==fCliente)return false;
@@ -4143,7 +4148,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
     if(fProducto){const q=fProducto.toLowerCase();if(!(v.items||[]).some(i=>(i.nombre||"").toLowerCase().includes(q)))return false;}
     if(busqIng.trim()){const q=busqIng.toLowerCase();if(!((v.cliente_nombre||"").toLowerCase().includes(q)||(v.vendedor||"").toLowerCase().includes(q)||(v.nro_factura||"").toLowerCase().includes(q)||(v.modalidad||"").toLowerCase().includes(q)||(v.notas_pedido_web||"").toLowerCase().includes(q)))return false;}
     return true;
-  }),[ventas,fVend,fMet,fFecha,fEstado,fCliente,fSinComision,fProducto,busqIng,METODOS_CON_COMISION]);
+  }),[ventas,fVend,fMet,fFecha,fEstado,fCliente,fSinComision,fProducto,busqIng,METODOS_CON_COMISION,anioActual]);
   // Si hay filtro "sinCobrar", usar saldo real (saldo_cobro si existe, sino total completo)
   const totalF=filtrados.reduce((s,v)=>{
     const comision=v.comision_plataforma||0;
@@ -4158,7 +4163,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   return(<>
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <div style={{display:"grid",gridTemplateColumns:esAdmin?"repeat(3,1fr)":"repeat(2,1fr)",gap:12}}>
-        <MetricCard label={fFecha?"Ventas del dia":"Ventas (filtro)"} value={fmtNum(filtrados.length)} sub={fFecha?fFecha:`de ${fmtNum(totalVentas)} historicas`}/>
+        <MetricCard label={fFecha?"Ventas del dia":`Ventas — ${anioActual}`} value={fmtNum(filtrados.length)} sub={fFecha?fFecha:`de ${fmtNum(totalVentas)} historicas · elegí un día puntual para ver años anteriores`}/>
         <MetricCard label="Total" value={fmt(totalF)} color={G.verde}/>
         {esAdmin&&<MetricCard label="Ganancia neta" value={fmt(ganF)} color={G.verde} sub={`${totalF>0?Math.round(ganF/totalF*100):0}% margen`}/>}
       </div>
