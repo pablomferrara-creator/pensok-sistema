@@ -314,6 +314,10 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Fix: tarjetas de "Reembolsos pendientes" no filtraban de verdad (2026-08-27)
+
+En Egresos, las tarjetas "Kito"/"Pensok" de "💸 Reembolsos pendientes" al hacer click solo activaban `filtroP` (pagador) — pero el monto que muestra cada tarjeta es `pagador === X && reembolso_pendiente && !reembolsado` (ver `deudasPers`/`deudaPensok`), no solo pagador. Como "Pensok" es el pagador por defecto de casi todos los egresos, filtrar solo por pagador dejaba pasar prácticamente todo — la lista no se reducía a lo que la tarjeta representa, daba la sensación de que "resaltaba pero no filtraba". Ahora el click activa también `setFiltroReemb(true)` (el mismo toggle del filtro "Estado: Reembolsos pendientes"), y se desactiva junto con `filtroP` al volver a hacer click. `Btn Limpiar` de la barra de filtros no toca `filtroReemb` — sigue así, fuera de alcance de este fix puntual.
+
 ## Totales mensuales históricos en el Dashboard (2026-08-27)
 
 El negocio usa el sistema recién desde marzo 2026 — todo lo anterior (y enero/febrero de este mismo año) aparece en $0 en el Dashboard porque no hay ventas/egresos cargados. Pablo pidió poder pasar los totales acumulados de cierre de cada mes viejo (sin cargar ingreso/egreso por ingreso/egreso) para poder ver la evolución y comparar con años anteriores.

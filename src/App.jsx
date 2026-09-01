@@ -4735,7 +4735,11 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
           <ST>💸 Reembolsos pendientes</ST>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
             {deudasPers.map(d=>(
-              <div key={d.persona} onClick={()=>setFP(filtroP===d.persona?"Todos":d.persona)}
+              <div key={d.persona} onClick={()=>{
+                const activar=filtroP!==d.persona;
+                setFP(activar?d.persona:"Todos");
+                setFiltroReemb(activar); // el número de la tarjeta es pagador + reembolso pendiente, no solo pagador
+              }}
                 style={{background:G.sup2,border:`1px solid ${filtroP===d.persona?G.amarillo:G.borde}`,borderRadius:10,padding:"10px 16px",cursor:"pointer",transition:"border-color .15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                   <Avatar nombre={d.persona} size={28}/>
@@ -4747,7 +4751,11 @@ function ModuloEgresos({egresos,pagosEgreso=[],abastecimiento=[],descuentosEgres
               </div>
             ))}
             {deudaPensok>0&&(
-              <div onClick={()=>setFP(filtroP==="Pensok"?"Todos":"Pensok")}
+              <div onClick={()=>{
+                const activar=filtroP!=="Pensok";
+                setFP(activar?"Pensok":"Todos");
+                setFiltroReemb(activar); // idem: el monto de la tarjeta ya es solo lo pendiente de reembolso
+              }}
                 style={{background:G.sup2,border:`1px solid ${filtroP==="Pensok"?"#FF4D6A":"#FF4D6A44"}`,borderRadius:10,padding:"10px 16px",cursor:"pointer",transition:"border-color .15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                   <Avatar nombre="Pensok" size={28} color={G.rojo}/>
