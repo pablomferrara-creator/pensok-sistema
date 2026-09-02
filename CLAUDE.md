@@ -314,6 +314,16 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Reporte de compra: ahora considera la demanda por envasado (2026-08-27)
+
+Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en `ModuloProductos`): calculaba cuánto pedir de cada producto mirando **solo sus propias ventas directas** (matcheadas por nombre contra `venta_items`). Para un producto que se compra a granel y se reenvasa en otro (ej. bidón de 5L de un proveedor → botella de 1L propia, vínculo `granel_id`/`consumo_granel`, ver "Productos a granel" más arriba), si el granel casi no se vende directo (todo se reenvasa), el reporte lo excluía por "sin historial" — aunque haya demanda real y alta escondida en las ventas de lo ya envasado, y terminaba faltando pedir del granel.
+
+- Nuevo mapa `envasadosPorGranelId`: para cada producto a granel `p`, junta todos los productos `env` con `env.granel_id===p.id`.
+- La demanda de `p` ahora es **directa + indirecta**: `cantIndirecta = Σ (ventas de cada env × env.consumo_granel)`, sumada a las ventas directas de `p` mismo. Mismo criterio para "meses con venta" (unión de meses, directos + indirectos) al calcular el promedio mensual y la proyección.
+- Se excluye de nuevo por "sin historial" solo si **ninguna de las dos fuentes** tiene ventas.
+- La tabla del modal y el HTML/PDF exportado marcan con un badge **"♻ +envasado"** al lado del nombre cuando una línea incluye demanda indirecta, para que quede claro por qué se está sugiriendo pedir eso.
+- No toca nada de Abastecimiento/Control de Stock — es solo el cálculo de proyección de compra.
+
 ## Fix general: los filtros de cada módulo ya no se resetean al guardar/editar/dar de baja algo (2026-08-27)
 
 Pablo reportó el caso puntual de Productos: filtraba por proveedor, editaba/desactivaba un producto, y al guardar el filtro desaparecía — tenía que volver a filtrar para seguir con el siguiente. La causa era **general, no específica de Productos**: el área de contenido principal (`App`, cerca del render de todos los `Modulo*`) mostraba el spinner de pantalla completa "Cargando datos..." con la condición `data.loading&&modulo!=="venta"` — y **`data.loading` se pone en `true` un instante en CADA `cargar()`**, que se llama al final de prácticamente cualquier acción que guarda algo (`guardarProducto`, `toggleProveedor`, editar/eliminar cualquier cosa, etc.), no solo en la carga inicial de la página. Cada vez que eso pasaba, el módulo activo se **desmontaba y volvía a montar por completo**, perdiendo cualquier filtro/búsqueda que viviera como estado local de ese módulo (`useState` dentro del componente).

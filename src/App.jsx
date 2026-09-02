@@ -5949,18 +5949,45 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       });
     });
 
+    // Productos que se envasan DESDE otro (ej. botella de 1L propia que sale de un bidón de 5L
+    // de un proveedor) -- agrupados por el id del producto a granel del que consumen, para
+    // sumar su demanda a la hora de proyectar cuánto pedir del granel. Sin esto, un producto a
+    // granel que casi no se vende directo (todo se reenvasa) quedaba afuera del reporte por
+    // "sin historial", aunque haya demanda real escondida en las ventas de lo ya envasado.
+    const envasadosPorGranelId = {};
+    productos.forEach(p=>{
+      if(p.granel_id){
+        if(!envasadosPorGranelId[p.granel_id]) envasadosPorGranelId[p.granel_id]=[];
+        envasadosPorGranelId[p.granel_id].push(p);
+      }
+    });
+
     // Calcular score y cantidad proyectada por producto
     const lineas = [];
 
     productos.filter(p=>p.activo&&p.costo>0).forEach(p=>{
       const key = (p.nombre||"").trim().toLowerCase();
-      const hist = ventasPorNombre[key];
-      if(!hist||hist.cant===0) return; // excluir sin historial
+      const histDirecto = ventasPorNombre[key];
+
+      // Demanda indirecta: ventas de cada producto envasado a partir de este × cuánto consume
+      // de este granel por unidad vendida (mismas unidades que stock, ver consumo_granel).
+      let cantIndirecta = 0;
+      const mesesIndirectos = new Set();
+      (envasadosPorGranelId[p.id]||[]).forEach(env=>{
+        const histEnv = ventasPorNombre[(env.nombre||"").trim().toLowerCase()];
+        if(!histEnv) return;
+        cantIndirecta += histEnv.cant * (env.consumo_granel||0);
+        histEnv.mesesConVenta.forEach(m=>mesesIndirectos.add(m));
+      });
+
+      const cantDirecta = histDirecto?.cant||0;
+      const cantTotal    = cantDirecta + cantIndirecta;
+      if(cantTotal===0) return; // sin historial, ni directo ni por envasado
       if(rcProveedor!=="Todos"&&(p.proveedor||"")!==rcProveedor) return;
 
-      // Promedio mensual de ventas en el período analizado
-      const mesesConVenta = hist.mesesConVenta.size;
-      const promMensual   = hist.cant / Math.max(mesesConVenta,1);
+      // Promedio mensual de ventas en el período analizado (directas + por envasado)
+      const mesesConVenta = new Set([...(histDirecto?.mesesConVenta||[]),...mesesIndirectos]);
+      const promMensual   = cantTotal / Math.max(mesesConVenta.size,1);
 
       // Cantidad proyectada para N meses
       const cantProyectada = Math.ceil(promMensual * mesesProy);
@@ -5972,7 +5999,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       // Score de prioridad: combina ganancia por unidad, unidades vendidas y urgencia por stock
       const ganPorUnidad = (p.precio_min||0)-(p.costo||0);
       const urgencia     = p.stock===0?3:p.stock<=(p.stock_min||0)?2:1;
-      const score        = (ganPorUnidad * hist.cant * urgencia);
+      const score        = (ganPorUnidad * cantTotal * urgencia);
 
       lineas.push({
         id:        p.id,
@@ -5990,7 +6017,8 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
         pctGan:    p.costo>0?Math.round((ganPorUnidad/p.costo)*100):0,
         urgencia,
         score,
-        mesesConVenta,
+        mesesConVenta: mesesConVenta.size,
+        incluyeEnvasado: cantIndirecta>0,
       });
     });
 
@@ -6043,7 +6071,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     const rows = r.lineas.map(l=>`
       <tr>
         <td>${l.codigo}</td>
-        <td>${l.nombre}</td>
+        <td>${l.nombre}${l.incluyeEnvasado?' <span style="color:#4D9EFF;font-size:10px">♻ +envasado</span>':''}</td>
         <td>${l.proveedor}</td>
         <td style="text-align:center">${fmtNum(l.stock)}</td>
         <td style="text-align:center">${l.promMensual}</td>
@@ -6522,7 +6550,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                   {rcResultado.lineas.map((l,i)=>(
                     <tr key={l.id} style={{borderBottom:`1px solid ${G.borde}22`,background:i%2===0?"transparent":G.sup2+"44"}}>
                       <td style={{padding:"7px 10px",fontFamily:"DM Mono,monospace",fontSize:10,color:G.textoSec}}>{l.codigo}</td>
-                      <td style={{padding:"7px 10px",fontWeight:500,maxWidth:200}}>{l.nombre}</td>
+                      <td style={{padding:"7px 10px",fontWeight:500,maxWidth:200}}>{l.nombre}{l.incluyeEnvasado&&<span title="Incluye la demanda de lo que se vende ya envasado a partir de este producto" style={{marginLeft:6,fontSize:10,color:G.azul}}>♻ +envasado</span>}</td>
                       <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stock)}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",color:G.textoSec,fontFamily:"DM Mono,monospace"}}>{l.promMensual}</td>
