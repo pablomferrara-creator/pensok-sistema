@@ -167,11 +167,14 @@ un problema de datos aparte (vendido antes de abastecer), no un aviso de "andá 
   "Estado" — "Con mínimo" / "Sin mínimo (0)" / "Todos" — para poder auditar rápido a cuáles
   productos les falta setear el mínimo, ya que ahora un mínimo en 0 significa "no avisar nunca"
   (ver punto de arriba) y por eso importa saber cuáles quedaron así sin querer vs. a propósito.
-- **No existe (todavía) un campo de "stock deseado"** — solo `stock` (actual) y `stock_min`
-  (umbral de alerta). Pablo preguntó dónde se carga porque lo usa para calcular cuánto comprar;
-  hoy no hay ningún lugar para eso, es un campo nuevo a agregar si se pide explícitamente (no se
-  agregó de entrada porque cambia el modelo de datos — hay que definir junto con Pablo qué
-  significa exactamente y dónde se usa antes de tocar el schema).
+- **"Stock deseado" (2026-08-27): definido como `stock_min × 2`**, sin campo propio en la base
+  todavía — se usa como fórmula en tiempo de cálculo, no como columna guardada. Se usa en el
+  modo "Por stock mínimo" de "🛒 Reporte de compra" (`ModuloProductos`): botón "Completar hasta"
+  con dos opciones, "Stock mínimo" (default, `stock_min` tal cual) o "Stock deseado (mín. × 2)"
+  (`rcObjetivo`) — multiplica el mínimo de CADA local (propio y `stockMinCaamanio`) por 2 antes
+  de calcular `pedirPilar`/`pedirCaamanio`, en `calcularPorStockMinimo`. Si en algún momento se
+  necesita una fórmula distinta a mínimo×2, o un campo propio editable por producto, es un
+  cambio de schema aparte, a definir junto con Pablo.
 
 ## Control de Stock (conteo físico + ajuste)
 

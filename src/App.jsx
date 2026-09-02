@@ -5917,6 +5917,9 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   // solo lo que esté bajo mínimo acá y/o en el otro local, con la cantidad sugerida separada
   // por local -- para saber de entrada cuánto traspasar cuando llegue el pedido.
   const [rcModo,           setRcModo]           = useState("inteligente");
+  // Solo para el modo "stockMinimo": hasta qué nivel completar. "Stock deseado" = stock
+  // mínimo × 2 (no hay un campo de stock deseado propio todavía -- ver CLAUDE.md).
+  const [rcObjetivo,       setRcObjetivo]       = useState("minimo"); // "minimo" | "deseado"
   const [rcGenerando,      setRcGenerando]      = useState(false);
   const [rcPdfLoading,     setRcPdfLoading]     = useState(false);
 
@@ -6134,17 +6137,19 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     const otroPorCodigo = {};
     productosOtro.forEach(p=>{ if(p.codigo) otroPorCodigo[p.codigo]=p; });
 
+    const factorObjetivo = rcObjetivo==="deseado" ? 2 : 1; // stock deseado = mínimo × 2
+
     const lineas = [];
     productos.filter(p=>p.activo&&p.costo>0).forEach(p=>{
       if(rcProveedor!=="Todos"&&(p.proveedor||"")!==rcProveedor) return;
 
       const stockMinPilar = p.stock_min||0;
-      const pedirPilar = stockMinPilar>0 ? Math.max(0,stockMinPilar-(p.stock||0)) : 0;
+      const pedirPilar = stockMinPilar>0 ? Math.max(0,stockMinPilar*factorObjetivo-(p.stock||0)) : 0;
 
       const otro = otroPorCodigo[p.codigo];
       const stockCaamanio = otro?.stock||0;
       const stockMinCaamanio = otro?.stock_min||0;
-      const pedirCaamanio = (otro&&stockMinCaamanio>0) ? Math.max(0,stockMinCaamanio-stockCaamanio) : 0;
+      const pedirCaamanio = (otro&&stockMinCaamanio>0) ? Math.max(0,stockMinCaamanio*factorObjetivo-stockCaamanio) : 0;
 
       const cantAPedir = pedirPilar+pedirCaamanio;
       if(cantAPedir<=0) return; // ninguno de los dos locales lo necesita
@@ -6173,6 +6178,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
 
     setRcResultado({
       modo: "stockMinimo",
+      objetivo: rcObjetivo,
       lineas, totalCompra, porProveedor,
       generadoEn: new Date().toLocaleString("es-AR"),
       presupuesto: 0,
@@ -6313,7 +6319,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       doc.text(esStockMinimo?'Reporte de Compra — Por Stock Mínimo — Pensok':'Reporte de Compra Inteligente — Pensok', ML, 9);
       doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...gris);
       const subt = esStockMinimo
-        ? `Generado el ${r.generadoEn} · Cantidad sugerida por local según el stock mínimo propio de ${LOCALES[localKey].nombre} y ${LOCALES[otroLocalKey].nombre}`
+        ? `Generado el ${r.generadoEn} · Completar hasta ${r.objetivo==="deseado"?"el stock deseado (mínimo × 2)":"el stock mínimo"} propio de ${LOCALES[localKey].nombre} y ${LOCALES[otroLocalKey].nombre}`
         : `Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?'es':''}${r.incluyoOtro?` · Incluye demanda de ${LOCALES[otroLocalKey].nombre}`:''}`;
       doc.text(subt, ML, 14.5);
     }
@@ -6815,6 +6821,13 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                 Lista los productos de un proveedor que estén bajo su stock mínimo (acá y/o en {LOCALES[otroLocalKey].nombre}), y sugiere cuánto pedir para cada local por separado según el stock mínimo cargado en cada uno — para saber de entrada cuánto separar cuando llegue el pedido.
               </div>
               <Fi label="Proveedor" value={rcProveedor} onChange={setRcProveedor} options={["Todos",...provsUnicos.filter(p=>p!=="Todos")]}/>
+              <div>
+                <div style={{fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Completar hasta</div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>setRcObjetivo("minimo")} style={{flex:1,background:rcObjetivo==="minimo"?G.verde:G.sup2,color:rcObjetivo==="minimo"?"#000":G.textoSec,border:`1px solid ${rcObjetivo==="minimo"?G.verde:G.borde}`,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer"}}>Stock mínimo</button>
+                  <button onClick={()=>setRcObjetivo("deseado")} style={{flex:1,background:rcObjetivo==="deseado"?G.verde:G.sup2,color:rcObjetivo==="deseado"?"#000":G.textoSec,border:`1px solid ${rcObjetivo==="deseado"?G.verde:G.borde}`,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer"}}>Stock deseado (mín. × 2)</button>
+                </div>
+              </div>
               <Btn full onClick={calcularPorStockMinimo} disabled={rcGenerando}>
                 {rcGenerando?"Calculando...":"Generar reporte"}
               </Btn>
@@ -6839,7 +6852,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             </div>
             <div style={{fontSize:11,color:G.textoSec}}>
               {rcResultado.modo==="stockMinimo"
-                ? `Cantidad sugerida por local según el stock mínimo propio de cada uno (${LOCALES[localKey].nombre} y ${LOCALES[otroLocalKey].nombre})`
+                ? `Cantidad sugerida por local para completar hasta ${rcResultado.objetivo==="deseado"?"el stock deseado (mínimo × 2)":"el stock mínimo"} propio de cada uno (${LOCALES[localKey].nombre} y ${LOCALES[otroLocalKey].nombre})`
                 : (rcResultado.incluyoOtro?`Incluye la demanda de ${LOCALES[otroLocalKey].nombre}`:`No incluye ${LOCALES[otroLocalKey].nombre}`)}
             </div>
             {Object.keys(rcResultado.porProveedor).length>1&&(
