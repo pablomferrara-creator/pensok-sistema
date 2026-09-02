@@ -9916,6 +9916,13 @@ export default function App(){
   const [rolChecking, setRolChecking] = useState(true); // esperar hasta tener el rol real
   const [rol,      setRol]      = useState("local"); // default local hasta confirmar
   const [modulo,   setModulo]   = useState("analisis");
+  // Una vez que hubo una primera carga de datos, el spinner de pantalla completa no vuelve a
+  // mostrarse -- de lo contrario, CADA guardado/edición/baja dispara cargar() de nuevo (loading
+  // pasa a true un instante) y el módulo activo se desmonta y remonta por completo, perdiendo
+  // todos sus filtros/búsquedas locales. Con esto, un refresh de datos en segundo plano deja el
+  // módulo montado (solo cambian los props), y los filtros sobreviven a guardar/editar/dar de
+  // baja algo -- se limpian solo si el usuario los limpia a mano o recarga la página entera.
+  const [cargoInicial, setCargoInicial] = useState(false);
   const [filtroIngresos, setFiltroIngresos] = useState("");
   const [filtroEgresos, setFiltroEgresos] = useState("");
   const [filtroTareasResp, setFiltroTareasResp] = useState("");
@@ -9952,6 +9959,7 @@ export default function App(){
   },[]);
 
   const data = useData(toast, session?.user?.email||"");
+  useEffect(()=>{ if(!data.loading&&!cargoInicial) setCargoInicial(true); },[data.loading,cargoInicial]);
 
   // Al cargar (y en cada auto-refresh), un admin dispara la creación de la tarea
   // mensual de Control de Stock si todavía no existe para este mes — ver useData.
@@ -10091,7 +10099,7 @@ export default function App(){
         </div>
 
         <div className="psk-main" style={{padding:"20px 22px",maxWidth:1200,margin:"0 auto"}}>
-          {data.loading&&modulo!=="venta"
+          {!cargoInicial&&data.loading&&modulo!=="venta"
             ?<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:12}}><Spinner/><span style={{color:G.textoSec}}>Cargando datos...</span></div>
             :(<>
               {modulo==="analisis"       && <ModuloAnalisis       ventas={data.ventasConItems} egresos={data.egresos} productos={data.productos} vendedores={data.vendedores} totalNosDeben={data.totalNosDeben} totalDeudaCamanio={data.totalDeudaCamanio} anioStats={data.anioStats} devoluciones={data.devoluciones} descuentosEgreso={data.descuentosEgreso} pagosEgreso={data.pagosEgreso} historicoMensual={data.historicoMensual} onNavegar={setModulo} onFiltroIngresos={setFiltroIngresos} onFiltroEgresos={setFiltroEgresos}/>}
