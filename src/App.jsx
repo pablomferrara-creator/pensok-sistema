@@ -5940,45 +5940,55 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     });
     const todosMeses = [...mesesActual,...mesesAnterior];
 
-    // Ventas del otro local (Caamaño se abastece por Traspasos desde acá, así que su demanda
-    // real también hay que cubrirla comprando desde este local -- ver checkbox del formulario).
-    // No es contiguo el rango de meses (últimos N + mismos N del año pasado), así que se trae
-    // un rango amplio por fecha y se filtra preciso igual que con las ventas propias.
+    // Ventas (y stock) del otro local (Caamaño se abastece por Traspasos desde acá, así que su
+    // demanda real también hay que cubrirla comprando desde este local -- ver checkbox del
+    // formulario). No es contiguo el rango de meses (últimos N + mismos N del año pasado), así
+    // que se trae un rango amplio por fecha y se filtra preciso igual que con las ventas propias.
     let ventasOtro = [];
+    const stockOtroPorCodigo = {};
     if(rcIncluirOtro){
       try{
         const mesesOrd = [...todosMeses].sort();
         const desde = mesesOrd[0]+"-01";
         const [uy,um] = mesesOrd[mesesOrd.length-1].split("-").map(Number);
         const hasta = new Date(uy,um,1).toISOString().slice(0,10); // 1er día del mes siguiente al último considerado (límite exclusivo)
-        const {data} = await supabaseOtro.from("ventas")
-          .select("fecha, items:venta_items(nombre,cantidad,precio,costo)")
-          .gte("fecha",desde).lt("fecha",hasta).limit(20000);
-        ventasOtro = data||[];
-      }catch(e){ console.warn(`No se pudieron cargar las ventas de ${LOCALES[otroLocalKey].nombre} para el reporte de compra:`,e); }
+        const [{data:vOtro},{data:pOtro}] = await Promise.all([
+          supabaseOtro.from("ventas").select("fecha, items:venta_items(nombre,cantidad,precio,costo)").gte("fecha",desde).lt("fecha",hasta).limit(20000),
+          supabaseOtro.from("productos").select("codigo,stock,stock_min").eq("activo",true),
+        ]);
+        ventasOtro = vOtro||[];
+        (pOtro||[]).forEach(p=>{ if(p.codigo) stockOtroPorCodigo[p.codigo]=p; });
+      }catch(e){ console.warn(`No se pudieron cargar los datos de ${LOCALES[otroLocalKey].nombre} para el reporte de compra:`,e); }
     }
 
-    // Ventas por producto en esos meses (agrupado por nombre, ya que venta_items no tiene producto_id)
-    const ventasPorNombre = {};
-    [...ventas,...ventasOtro].forEach(v=>{
-      const mes = v.fecha?.slice(0,7);
-      if(!todosMeses.includes(mes)) return;
-      (v.items||[]).forEach(it=>{
-        const key = (it.nombre||"").trim().toLowerCase();
-        if(!key) return;
-        if(!ventasPorNombre[key]) ventasPorNombre[key]={cant:0,gan:0,mesesConVenta:new Set()};
-        ventasPorNombre[key].cant+=(it.cantidad||0);
-        const ganItem = (it.precio-(it.costo||0))*(it.cantidad||0);
-        ventasPorNombre[key].gan+=ganItem;
-        ventasPorNombre[key].mesesConVenta.add(mes);
+    // Ventas por producto, propias y del otro local POR SEPARADO (no mezcladas) -- así se puede
+    // proyectar y sugerir cuánto pedir para cada local por separado, no solo un total.
+    function agregarVentasA(mapa,listaVentas){
+      listaVentas.forEach(v=>{
+        const mes = v.fecha?.slice(0,7);
+        if(!todosMeses.includes(mes)) return;
+        (v.items||[]).forEach(it=>{
+          const key = (it.nombre||"").trim().toLowerCase();
+          if(!key) return;
+          if(!mapa[key]) mapa[key]={cant:0,gan:0,mesesConVenta:new Set()};
+          mapa[key].cant+=(it.cantidad||0);
+          mapa[key].gan+=(it.precio-(it.costo||0))*(it.cantidad||0);
+          mapa[key].mesesConVenta.add(mes);
+        });
       });
-    });
+    }
+    const ventasPorNombrePropio = {};
+    agregarVentasA(ventasPorNombrePropio, ventas);
+    const ventasPorNombreOtro = {};
+    if(rcIncluirOtro) agregarVentasA(ventasPorNombreOtro, ventasOtro);
 
     // Productos que se envasan DESDE otro (ej. botella de 1L propia que sale de un bidón de 5L
     // de un proveedor) -- agrupados por el id del producto a granel del que consumen, para
     // sumar su demanda a la hora de proyectar cuánto pedir del granel. Sin esto, un producto a
     // granel que casi no se vende directo (todo se reenvasa) quedaba afuera del reporte por
     // "sin historial", aunque haya demanda real escondida en las ventas de lo ya envasado.
+    // granel_id es un id interno de ESTA base -- el matcheo del envasado en el otro local se
+    // hace igual, por nombre, contra su propio mapa de ventas.
     const envasadosPorGranelId = {};
     productos.forEach(p=>{
       if(p.granel_id){
@@ -5986,44 +5996,57 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
         envasadosPorGranelId[p.granel_id].push(p);
       }
     });
+    // Demanda (directa + por envasado) de un producto según UN mapa de ventas puntual.
+    function demandaDe(p,mapa){
+      const key = (p.nombre||"").trim().toLowerCase();
+      const directo = mapa[key];
+      let cantIndirecta = 0;
+      const mesesIndirectos = new Set();
+      (envasadosPorGranelId[p.id]||[]).forEach(env=>{
+        const histEnv = mapa[(env.nombre||"").trim().toLowerCase()];
+        if(!histEnv) return;
+        cantIndirecta += histEnv.cant * (env.consumo_granel||0);
+        histEnv.mesesConVenta.forEach(m=>mesesIndirectos.add(m));
+      });
+      const cantDirecta = directo?.cant||0;
+      const meses = new Set([...(directo?.mesesConVenta||[]),...mesesIndirectos]);
+      return {cantTotal:cantDirecta+cantIndirecta, meses, tieneIndirecta:cantIndirecta>0};
+    }
 
     // Calcular score y cantidad proyectada por producto
     const lineas = [];
 
     productos.filter(p=>p.activo&&p.costo>0).forEach(p=>{
-      const key = (p.nombre||"").trim().toLowerCase();
-      const histDirecto = ventasPorNombre[key];
+      const dPropio = demandaDe(p, ventasPorNombrePropio);
+      const dOtro   = rcIncluirOtro ? demandaDe(p, ventasPorNombreOtro) : {cantTotal:0,meses:new Set(),tieneIndirecta:false};
 
-      // Demanda indirecta: ventas de cada producto envasado a partir de este × cuánto consume
-      // de este granel por unidad vendida (mismas unidades que stock, ver consumo_granel).
-      let cantIndirecta = 0;
-      const mesesIndirectos = new Set();
-      (envasadosPorGranelId[p.id]||[]).forEach(env=>{
-        const histEnv = ventasPorNombre[(env.nombre||"").trim().toLowerCase()];
-        if(!histEnv) return;
-        cantIndirecta += histEnv.cant * (env.consumo_granel||0);
-        histEnv.mesesConVenta.forEach(m=>mesesIndirectos.add(m));
-      });
-
-      const cantDirecta = histDirecto?.cant||0;
-      const cantTotal    = cantDirecta + cantIndirecta;
-      if(cantTotal===0) return; // sin historial, ni directo ni por envasado
+      const cantTotal = dPropio.cantTotal + dOtro.cantTotal;
+      if(cantTotal===0) return; // sin historial, ni directo ni por envasado, en ningún local
       if(rcProveedor!=="Todos"&&(p.proveedor||"")!==rcProveedor) return;
 
-      // Promedio mensual de ventas en el período analizado (directas + por envasado)
-      const mesesConVenta = new Set([...(histDirecto?.mesesConVenta||[]),...mesesIndirectos]);
-      const promMensual   = cantTotal / Math.max(mesesConVenta.size,1);
+      // Promedio mensual y proyección, cada local con SU propio ritmo de ventas
+      const promPropio = dPropio.cantTotal / Math.max(dPropio.meses.size,1);
+      const promOtro    = dOtro.cantTotal    / Math.max(dOtro.meses.size,1);
+      const promMensual = promPropio+promOtro; // combinado, solo para mostrar/ordenar
 
-      // Cantidad proyectada para N meses
-      const cantProyectada = Math.ceil(promMensual * mesesProy);
+      const cantProyPropio = Math.ceil(promPropio*mesesProy);
+      const cantProyOtro    = Math.ceil(promOtro*mesesProy);
 
-      // Cantidad a pedir = proyectada - stock actual (si stock cubre, pedir 0)
-      const cantAPedir = Math.max(0, cantProyectada - (p.stock||0));
-      if(cantAPedir===0) return; // stock actual ya cubre la proyección
+      const otro = stockOtroPorCodigo[p.codigo];
+      const stockOtro = otro?.stock||0;
+      const stockMinOtro = otro?.stock_min||0;
+
+      // Cantidad a pedir por local = proyectada - stock actual de ESE local (si stock cubre, 0)
+      const pedirPilar     = Math.max(0, cantProyPropio-(p.stock||0));
+      const pedirCaamanio  = rcIncluirOtro ? Math.max(0, cantProyOtro-stockOtro) : 0;
+      const cantAPedir      = pedirPilar+pedirCaamanio;
+      if(cantAPedir===0) return; // el stock de cada local ya cubre su propia proyección
 
       // Score de prioridad: combina ganancia por unidad, unidades vendidas y urgencia por stock
       const ganPorUnidad = (p.precio_min||0)-(p.costo||0);
-      const urgencia     = p.stock===0?3:p.stock<=(p.stock_min||0)?2:1;
+      const otroEnCero = rcIncluirOtro && stockMinOtro>0 && stockOtro===0;
+      const otroBajo    = rcIncluirOtro && stockMinOtro>0 && stockOtro<=stockMinOtro;
+      const urgencia     = (p.stock===0||otroEnCero) ? 3 : (p.stock<=(p.stock_min||0)||otroBajo) ? 2 : 1;
       const score        = (ganPorUnidad * cantTotal * urgencia);
 
       lineas.push({
@@ -6035,15 +6058,14 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
         stock:     p.stock||0,
         stock_min: p.stock_min||0,
         promMensual: Math.round(promMensual*10)/10,
-        cantProyectada,
-        cantAPedir,
+        pedirPilar, pedirCaamanio, cantAPedir,
         subtotal:  cantAPedir * p.costo,
         ganPorUnidad,
         pctGan:    p.costo>0?Math.round((ganPorUnidad/p.costo)*100):0,
         urgencia,
         score,
-        mesesConVenta: mesesConVenta.size,
-        incluyeEnvasado: cantIndirecta>0,
+        mesesConVenta: dPropio.meses.size,
+        incluyeEnvasado: dPropio.tieneIndirecta||dOtro.tieneIndirecta,
       });
     });
 
@@ -6058,15 +6080,22 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     lineas.forEach(l=>{
       if(presupuesto>0&&presupuestoRestante<=0) return;
       let cant = l.cantAPedir;
+      let pedirPilar = l.pedirPilar, pedirCaamanio = l.pedirCaamanio;
       if(presupuesto>0){
         const cantAffordable = Math.floor(presupuestoRestante/l.costo);
         if(cantAffordable===0) return;
         cant = Math.min(cant, cantAffordable);
+        if(cant<l.cantAPedir){
+          // Reducido por presupuesto: repartir la merma proporcional entre los dos locales,
+          // asegurando que sigan sumando exacto el nuevo total.
+          pedirPilar = Math.round(l.pedirPilar * (cant/l.cantAPedir));
+          pedirCaamanio = cant - pedirPilar;
+        }
       }
       const subtotal = cant * l.costo;
       presupuestoRestante -= subtotal;
       totalCompra += subtotal;
-      lineasFinal.push({...l, cantAPedir:cant, subtotal});
+      lineasFinal.push({...l, cantAPedir:cant, pedirPilar, pedirCaamanio, subtotal});
     });
 
     // Agrupar por proveedor para el resumen
@@ -6249,6 +6278,16 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       {k:'pedirPilar',label:`Pedir ${LOCALES[localKey].nombre.replace('Pensok ','')}`, w:18, align:'center'},
       {k:'pedirCaamanio',label:`Pedir ${LOCALES[otroLocalKey].nombre.replace('Pensok ','')}`, w:18, align:'center'},
       {k:'cantAPedir',label:'Total',     w:20, align:'center'},
+      {k:'costo',     label:'Costo',     w:26, align:'right'},
+      {k:'subtotal',  label:'Subtotal',  w:30, align:'right'},
+      {k:'urgencia',  label:'Urg.',      w:16, align:'center'},
+    ] : r.incluyoOtro ? [
+      {k:'codigo',    label:'Código',    w:22, align:'left'},
+      {k:'nombre',    label:'Producto',  w:78, align:'left'},
+      {k:'proveedor', label:'Proveedor', w:30, align:'left'},
+      {k:'pedirPilar',label:`Pedir ${LOCALES[localKey].nombre.replace('Pensok ','')}`, w:18, align:'center'},
+      {k:'pedirCaamanio',label:`Pedir ${LOCALES[otroLocalKey].nombre.replace('Pensok ','')}`, w:18, align:'center'},
+      {k:'cantAPedir',label:'Total',     w:18, align:'center'},
       {k:'costo',     label:'Costo',     w:26, align:'right'},
       {k:'subtotal',  label:'Subtotal',  w:30, align:'right'},
       {k:'urgencia',  label:'Urg.',      w:16, align:'center'},
@@ -6868,10 +6907,15 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                     <tr style={{background:G.sup2,position:"sticky",top:0}}>
                       {[
                         {h:"Código",col:"codigo"},{h:"Producto",col:"nombre"},{h:"Proveedor",col:"proveedor"},
-                        {h:"Stock",col:"stock"},{h:"Prom/mes",col:"promMensual"},{h:"A pedir",col:"cantAPedir"},
+                        {h:"Stock",col:"stock"},{h:"Prom/mes",col:"promMensual"},
+                        ...(rcResultado.incluyoOtro?[
+                          {h:`Pedir ${LOCALES[localKey].nombre.replace('Pensok ','')}`,col:"pedirPilar"},
+                          {h:`Pedir ${LOCALES[otroLocalKey].nombre.replace('Pensok ','')}`,col:"pedirCaamanio"},
+                          {h:"Total",col:"cantAPedir"},
+                        ]:[{h:"A pedir",col:"cantAPedir"}]),
                         {h:"Costo",col:"costo"},{h:"Subtotal",col:"subtotal"},{h:"% Gan",col:"pctGan"},{h:"Urgencia",col:"urgencia"},
                       ].map(({h,col})=>(
-                        <th key={h} onClick={()=>rcToggleSort(col)} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`,cursor:"pointer",userSelect:"none"}}>{h}<RcSortIcon col={col}/></th>
+                        <th key={col} onClick={()=>rcToggleSort(col)} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`,cursor:"pointer",userSelect:"none"}}>{h}<RcSortIcon col={col}/></th>
                       ))}
                       <th style={{padding:"8px 10px",borderBottom:`1px solid ${G.borde}`}}></th>
                     </tr>
@@ -6884,10 +6928,22 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                         <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
                         <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stock)}</td>
                         <td style={{padding:"7px 10px",textAlign:"center",color:G.textoSec,fontFamily:"DM Mono,monospace"}}>{l.promMensual}</td>
-                        <td style={{padding:"7px 10px",textAlign:"center"}}>
-                          <input type="number" min="0" value={l.cantAPedir} onChange={e=>rcCambiarCantidad(l.id,e.target.value)}
-                            style={{width:56,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 6px",color:G.verde,fontWeight:700,fontFamily:"DM Mono,monospace",fontSize:13,textAlign:"center",outline:"none"}}/>
-                        </td>
+                        {rcResultado.incluyoOtro?(<>
+                          <td style={{padding:"7px 10px",textAlign:"center"}}>
+                            <input type="number" min="0" value={l.pedirPilar} onChange={e=>rcCambiarCantidadSplit(l.id,'pedirPilar',e.target.value)}
+                              style={{width:48,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 4px",color:G.texto,fontWeight:600,fontFamily:"DM Mono,monospace",fontSize:12,textAlign:"center",outline:"none"}}/>
+                          </td>
+                          <td style={{padding:"7px 10px",textAlign:"center"}}>
+                            <input type="number" min="0" value={l.pedirCaamanio} onChange={e=>rcCambiarCantidadSplit(l.id,'pedirCaamanio',e.target.value)}
+                              style={{width:48,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 4px",color:G.texto,fontWeight:600,fontFamily:"DM Mono,monospace",fontSize:12,textAlign:"center",outline:"none"}}/>
+                          </td>
+                          <td style={{padding:"7px 10px",textAlign:"center",fontWeight:700,color:G.verde,fontFamily:"DM Mono,monospace",fontSize:14}}>{l.cantAPedir}</td>
+                        </>):(
+                          <td style={{padding:"7px 10px",textAlign:"center"}}>
+                            <input type="number" min="0" value={l.cantAPedir} onChange={e=>rcCambiarCantidad(l.id,e.target.value)}
+                              style={{width:56,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 6px",color:G.verde,fontWeight:700,fontFamily:"DM Mono,monospace",fontSize:13,textAlign:"center",outline:"none"}}/>
+                          </td>
+                        )}
                         <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{fmt(l.costo)}</td>
                         <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap"}}>{fmt(l.subtotal)}</td>
                         <td style={{padding:"7px 10px",textAlign:"center",color:l.pctGan>=60?G.verde:l.pctGan>=30?G.amarillo:G.rojo,fontFamily:"DM Mono,monospace"}}>{l.pctGan}%</td>
@@ -6898,7 +6954,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                       </tr>
                     ))}
                     <tr style={{borderTop:`2px solid ${G.borde}`,background:G.sup2}}>
-                      <td colSpan={7} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,fontSize:12}}>TOTAL</td>
+                      <td colSpan={rcResultado.incluyoOtro?9:7} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,fontSize:12}}>TOTAL</td>
                       <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"DM Mono,monospace",color:G.verde,fontSize:14}}>{fmt(rcResultado.totalCompra)}</td>
                       <td colSpan={3}></td>
                     </tr>

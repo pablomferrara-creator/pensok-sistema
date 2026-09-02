@@ -314,6 +314,17 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Reporte de compra inteligente: también sugiere el split por local (2026-08-27)
+
+Pablo notó que aunque el modo "Inteligente" ya sumaba la demanda de Caamaño al proyectar cuánto pedir (ver sección de más abajo, "suma también la demanda de Caamaño"), el resultado era un solo número total — sin saber cuánto de eso era para reponer acá y cuánto para traspasar a Caamaño. Ahora, cuando "Incluir también las ventas de {otro local}" está tildado, `calcularRecompra` proyecta y sugiere `pedirPilar`/`pedirCaamanio` **por separado**, no solo el total.
+
+- Ya no arma una única bolsa `ventasPorNombre` mezclada — dos mapas separados (`ventasPorNombrePropio`/`ventasPorNombreOtro`, vía `agregarVentasA`), cada uno con su propio ritmo de ventas. `demandaDe(p,mapa)` calcula la demanda directa + por envasado (ver sección de envasado más abajo) para un producto según UN mapa puntual — se llama una vez por local.
+- Cada local proyecta con **su propio promedio mensual** (`promPropio`/`promOtro`) y se le resta **su propio stock actual** (`p.stock` acá, `stockOtroPorCodigo[p.codigo].stock` del otro, traído junto con las ventas del otro local en el mismo `Promise.all`) — no un mínimo ni una demanda compartida. `promMensual` mostrado en pantalla sigue siendo la suma de ambos, solo para referencia/orden.
+- Urgencia ahora también sube a 🔴/🟡 si el otro local está en 0 o por debajo de su propio stock mínimo, no solo el local propio.
+- **Presupuesto**: si el presupuesto recorta la cantidad total de una línea, la merma se reparte proporcional entre `pedirPilar`/`pedirCaamanio` (redondeando uno y ajustando el otro para que sigan sumando exacto el nuevo total) — no se pierde el split al aplicar un tope de gasto.
+- **En pantalla**: cuando `rcResultado.incluyoOtro` es true, la tabla reemplaza la columna única "A pedir" por tres — Pedir {local propio}, Pedir {otro local} (ambas editables con `rcCambiarCantidadSplit`, reutilizando la misma función del modo stock mínimo) y Total (suma, de solo lectura). Sin Caamaño incluido, se ve exactamente igual que antes (una sola columna "A pedir" editable).
+- **En el PDF**: mismo criterio — columnas separadas por local solo cuando `r.incluyoOtro` es true.
+
 ## Reporte de compra: segundo modo "Por stock mínimo" (2026-08-27)
 
 Pablo pidió una segunda forma de generar el reporte, más simple que la "Inteligente" (por historial de ventas): elegir un proveedor, listar solo lo que está bajo/agotado stock, y que sugiera cuánto pedir **para cada local por separado** (según el stock mínimo propio de cada uno) — para saber de entrada cuánto separar para Caamaño cuando llega el pedido y cargarlo más fácil en Traspasos.
