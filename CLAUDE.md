@@ -324,6 +324,7 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Nombres de producto muy largos para su columna se cortan a una línea (`splitTextToSize` + solo la primera línea) — no se ve el resto, pero tampoco se desborda a la columna de al lado.
 - Exporta en el mismo orden que se ve en pantalla (`rcLineasOrdenadas`), igual que antes.
 - Botón renombrado de "⬇ Exportar HTML/PDF" a "⬇ Exportar PDF".
+- **Columnas del PDF (2026-08-27, mismo día)**: a pedido de Pablo, "A pedir" se movió justo después de "Proveedor", y se sacaron del PDF las columnas Stock, Prom/mes y % Gan (siguen calculándose y viéndose/ordenándose en la tabla en pantalla, solo no van al PDF que se manda a cotizar). Quedó: Código, Producto, Proveedor, A pedir, Costo, Subtotal, Urg. El cálculo de dónde escribir "TOTAL"/el monto ya no usa índices de columna hardcodeados (`cols.slice(0,7)`) — busca la posición de la columna `subtotal` dinámicamente (`idxSubtotal`), para no romperse la próxima vez que cambie el set de columnas.
 
 ## Reporte de compra: tabla ordenable y editable antes de exportar (2026-08-27)
 

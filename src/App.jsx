@@ -6138,19 +6138,21 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     const lineas = rcLineasOrdenadas;
 
     // Columnas: {label, w, align}
+    // A pedir va justo después de Proveedor (a pedido de Pablo); Stock, Prom/mes y % Gan no
+    // se muestran en el PDF (siguen calculándose y se pueden ver/ordenar en la tabla en pantalla).
     const cols = [
-      {k:'codigo',    label:'Código',    w:20, align:'left'},
-      {k:'nombre',    label:'Producto',  w:72, align:'left'},
-      {k:'proveedor', label:'Proveedor', w:32, align:'left'},
-      {k:'stock',     label:'Stock',     w:16, align:'center'},
-      {k:'promMensual',label:'Prom/mes', w:18, align:'center'},
-      {k:'cantAPedir',label:'A pedir',   w:18, align:'center'},
-      {k:'costo',     label:'Costo',     w:24, align:'right'},
-      {k:'subtotal',  label:'Subtotal',  w:26, align:'right'},
-      {k:'pctGan',    label:'% Gan',     w:18, align:'center'},
-      {k:'urgencia',  label:'Urg.',      w:15, align:'center'},
+      {k:'codigo',    label:'Código',    w:22, align:'left'},
+      {k:'nombre',    label:'Producto',  w:88, align:'left'},
+      {k:'proveedor', label:'Proveedor', w:38, align:'left'},
+      {k:'cantAPedir',label:'A pedir',   w:22, align:'center'},
+      {k:'costo',     label:'Costo',     w:28, align:'right'},
+      {k:'subtotal',  label:'Subtotal',  w:32, align:'right'},
+      {k:'urgencia',  label:'Urg.',      w:18, align:'center'},
     ];
     const tableW = cols.reduce((s,c)=>s+c.w,0);
+    const idxSubtotal = cols.findIndex(c=>c.k==='subtotal');
+    const wHastaSubtotalExcl = cols.slice(0,idxSubtotal).reduce((s,c)=>s+c.w,0);
+    const wHastaSubtotalIncl = cols.slice(0,idxSubtotal+1).reduce((s,c)=>s+c.w,0);
 
     function dibujarHeaderPagina(){
       doc.setFillColor(...celeste);
@@ -6224,18 +6226,14 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
           case 'codigo': val=l.codigo; break;
           case 'nombre': val=l.nombre+(l.incluyeEnvasado?' (+envasado)':''); break;
           case 'proveedor': val=l.proveedor; break;
-          case 'stock': val=fmtNum(l.stock); break;
-          case 'promMensual': val=String(l.promMensual); break;
           case 'cantAPedir': val=String(l.cantAPedir); break;
           case 'costo': val=fmt(l.costo); break;
           case 'subtotal': val=fmt(l.subtotal); break;
-          case 'pctGan': val=l.pctGan+'%'; break;
           case 'urgencia': val=''; break;
           default: val='';
         }
         if(c.k==='cantAPedir'||c.k==='subtotal') doc.setFont('helvetica','bold'); else doc.setFont('helvetica','normal');
-        if(c.k==='pctGan') doc.setTextColor(...(l.pctGan>=60?verde:l.pctGan>=30?amarillo:rojo));
-        else doc.setTextColor(...negro);
+        doc.setTextColor(...negro);
         const maxW = c.w-4;
         const lines = doc.splitTextToSize(val, maxW);
         const tx = c.align==='right'?x+c.w-2 : c.align==='center'?x+c.w/2 : x+2;
@@ -6257,11 +6255,9 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     if(y+rowH > H-11){ doc.addPage(); pagina++; y=MT+4; dibujarHeaderPagina(); y=dibujarHeaderTabla(y); }
     doc.setFillColor(...celeste); doc.rect(ML,y,tableW,rowH,'F');
     doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...negro);
-    const wSinSubtotal = cols.slice(0,7).reduce((s,c)=>s+c.w,0);
-    doc.text('TOTAL', ML+wSinSubtotal-2, y+4.7, {align:'right'});
-    const wConSubtotal = cols.slice(0,8).reduce((s,c)=>s+c.w,0);
+    doc.text('TOTAL', ML+wHastaSubtotalExcl-2, y+4.7, {align:'right'});
     doc.setTextColor(...verde);
-    doc.text(fmt(r.totalCompra), ML+wConSubtotal-2, y+4.7, {align:'right'});
+    doc.text(fmt(r.totalCompra), ML+wHastaSubtotalIncl-2, y+4.7, {align:'right'});
 
     const totalPaginas = doc.internal.getNumberOfPages();
     for(let p=1;p<=totalPaginas;p++){ doc.setPage(p); dibujarPie(p,totalPaginas); }
