@@ -314,6 +314,17 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Reporte de compra: exporta PDF real, no .html (2026-08-27)
+
+`exportarRecompraPDF` armaba un HTML y lo descargaba con extensión `.html` (útil para verlo en el navegador, pero Pablo lo necesita como PDF de verdad para mandar a cotizar). Reescrito con jsPDF, mismo patrón que el resto de los PDF de Productos (carga dinámica de `jspdf.umd.min.js` desde cdnjs, header/pie celeste `[209,231,251]` para ahorrar tinta al imprimir):
+
+- A4 **horizontal** (caben las 10 columnas: Código, Producto, Proveedor, Stock, Prom/mes, A pedir, Costo, Subtotal, % Gan, Urgencia).
+- Urgencia se dibuja como un círculo de color (🔴🟡🟢 no son glyphs confiables en las fuentes por defecto de jsPDF) — rojo/amarillo/verde según `l.urgencia`.
+- Paginación manual: si no entra otra fila antes del pie, agrega página y repite el encabezado de tabla; al final recorre todas las páginas para numerarlas ("Página X de Y").
+- Nombres de producto muy largos para su columna se cortan a una línea (`splitTextToSize` + solo la primera línea) — no se ve el resto, pero tampoco se desborda a la columna de al lado.
+- Exporta en el mismo orden que se ve en pantalla (`rcLineasOrdenadas`), igual que antes.
+- Botón renombrado de "⬇ Exportar HTML/PDF" a "⬇ Exportar PDF".
+
 ## Reporte de compra: tabla ordenable y editable antes de exportar (2026-08-27)
 
 En el mismo modal de "🛒 Reporte de compra" (`ModuloProductos`), Pablo pidió poder ajustar el resultado antes de mandarlo a cotizar — no solo generarlo y exportarlo tal cual.

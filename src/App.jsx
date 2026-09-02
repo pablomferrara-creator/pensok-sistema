@@ -6118,67 +6118,155 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
 
   async function exportarRecompraPDF(){
     setRcPdfLoading(true);
+    // Cargar jsPDF dinámicamente (mismo patrón que el resto de los PDF de Productos)
+    if(!window.jspdf){
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+        s.onload=res; s.onerror=rej;
+        document.head.appendChild(s);
+      });
+    }
+    const {jsPDF} = window.jspdf;
+    const doc = new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+    const W=297, H=210, ML=12, MR=12, MT=14;
+    const negro=[30,30,30], gris=[110,110,110], grisClaro=[245,246,248], blanco=[255,255,255];
+    const celeste=[209,231,251]; // mismo celeste (ahorra tinta) que el resto de los PDF de Pensok
+    const verde=[0,150,100], amarillo=[200,150,0], rojo=[210,60,60];
+
     const r = rcResultado;
-    const rows = rcLineasOrdenadas.map(l=>`
-      <tr>
-        <td>${l.codigo}</td>
-        <td>${l.nombre}${l.incluyeEnvasado?' <span style="color:#4D9EFF;font-size:10px">♻ +envasado</span>':''}</td>
-        <td>${l.proveedor}</td>
-        <td style="text-align:center">${fmtNum(l.stock)}</td>
-        <td style="text-align:center">${l.promMensual}</td>
-        <td style="text-align:center;font-weight:700">${l.cantAPedir}</td>
-        <td style="text-align:right">${fmt(l.costo)}</td>
-        <td style="text-align:right;font-weight:700">${fmt(l.subtotal)}</td>
-        <td style="text-align:center;color:${l.pctGan>=60?"#00C48C":l.pctGan>=30?"#FFB800":"#FF4D6A"}">${l.pctGan}%</td>
-      </tr>`).join("");
+    const lineas = rcLineasOrdenadas;
 
-    const provRows = Object.entries(r.porProveedor).sort((a,b)=>b[1].subtotal-a[1].subtotal).map(([prov,d])=>
-      `<tr><td>${prov}</td><td style="text-align:center">${d.items} productos</td><td style="text-align:right;font-weight:700">${fmt(d.subtotal)}</td></tr>`
-    ).join("");
+    // Columnas: {label, w, align}
+    const cols = [
+      {k:'codigo',    label:'Código',    w:20, align:'left'},
+      {k:'nombre',    label:'Producto',  w:72, align:'left'},
+      {k:'proveedor', label:'Proveedor', w:32, align:'left'},
+      {k:'stock',     label:'Stock',     w:16, align:'center'},
+      {k:'promMensual',label:'Prom/mes', w:18, align:'center'},
+      {k:'cantAPedir',label:'A pedir',   w:18, align:'center'},
+      {k:'costo',     label:'Costo',     w:24, align:'right'},
+      {k:'subtotal',  label:'Subtotal',  w:26, align:'right'},
+      {k:'pctGan',    label:'% Gan',     w:18, align:'center'},
+      {k:'urgencia',  label:'Urg.',      w:15, align:'center'},
+    ];
+    const tableW = cols.reduce((s,c)=>s+c.w,0);
 
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
-    <style>
-      body{font-family:Arial,sans-serif;font-size:12px;color:#1a1a1a;padding:20px;}
-      h1{font-size:18px;color:#0F1117;margin-bottom:4px;}
-      .sub{color:#666;font-size:11px;margin-bottom:20px;}
-      .resumen{display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap;}
-      .card{background:#f5f5f5;border-radius:8px;padding:12px 18px;min-width:140px;}
-      .card-label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;}
-      .card-value{font-size:18px;font-weight:700;color:#0F1117;margin-top:2px;}
-      table{width:100%;border-collapse:collapse;margin-bottom:24px;}
-      th{background:#0F1117;color:#fff;padding:8px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;}
-      td{padding:7px 10px;border-bottom:1px solid #eee;}
-      tr:nth-child(even)td{background:#fafafa;}
-      .total-row td{font-weight:700;background:#e8f5e9;font-size:13px;}
-      h2{font-size:14px;margin:16px 0 8px;}
-      .footer{margin-top:20px;font-size:10px;color:#aaa;text-align:center;}
-    </style></head><body>
-    <h1>🛒 Reporte de Compra Inteligente — Pensok</h1>
-    <div class="sub">Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?"es":""}</div>
-    <div class="resumen">
-      <div class="card"><div class="card-label">Total a invertir</div><div class="card-value">${fmt(r.totalCompra)}</div></div>
-      <div class="card"><div class="card-label">Productos</div><div class="card-value">${r.lineas.length}</div></div>
-      <div class="card"><div class="card-label">Presupuesto</div><div class="card-value">${r.presupuesto>0?fmt(r.presupuesto):"Sin límite"}</div></div>
-      <div class="card"><div class="card-label">Proveedores</div><div class="card-value">${Object.keys(r.porProveedor).length}</div></div>
-    </div>
-    <h2>Detalle por producto</h2>
-    <table>
-      <thead><tr><th>Código</th><th>Producto</th><th>Proveedor</th><th>Stock</th><th>Prom/mes</th><th>Pedir</th><th>Costo unit.</th><th>Subtotal</th><th>% Gan</th></tr></thead>
-      <tbody>${rows}
-        <tr class="total-row"><td colspan="7" style="text-align:right">TOTAL</td><td>${fmt(r.totalCompra)}</td><td></td></tr>
-      </tbody>
-    </table>
-    <h2>Resumen por proveedor</h2>
-    <table><thead><tr><th>Proveedor</th><th>Items</th><th>Subtotal</th></tr></thead>
-    <tbody>${provRows}</tbody></table>
-    <div class="footer">Pensok · Reporte generado automáticamente basado en historial de ventas</div>
-    </body></html>`;
+    function dibujarHeaderPagina(){
+      doc.setFillColor(...celeste);
+      doc.rect(0,0,W,MT+2,'F');
+      doc.setTextColor(...negro);
+      doc.setFont('helvetica','bold'); doc.setFontSize(13);
+      doc.text('Reporte de Compra Inteligente — Pensok', ML, 9);
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...gris);
+      doc.text(`Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?'es':''}`, ML, 14.5);
+    }
+    function dibujarPie(pagina,totalPaginas){
+      doc.setFillColor(...celeste);
+      doc.rect(0,H-9,W,9,'F');
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...gris);
+      doc.text('Pensok · Reporte generado automáticamente en base al historial de ventas', ML, H-3.5);
+      doc.text(`Página ${pagina} de ${totalPaginas}`, W-MR, H-3.5, {align:'right'});
+    }
+    function dibujarHeaderTabla(y){
+      doc.setFillColor(...negro);
+      doc.rect(ML,y,tableW,7,'F');
+      doc.setTextColor(...blanco); doc.setFont('helvetica','bold'); doc.setFontSize(8);
+      let x=ML;
+      cols.forEach(c=>{
+        const tx = c.align==='right'?x+c.w-2 : c.align==='center'?x+c.w/2 : x+2;
+        doc.text(c.label.toUpperCase(), tx, y+4.7, {align:c.align==='left'?'left':c.align});
+        x+=c.w;
+      });
+      return y+7;
+    }
 
-    const blob = new Blob([html],{type:"text/html"});
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href=url; a.download=`recompra-pensok-${new Date().toISOString().slice(0,10)}.html`;
-    a.click(); URL.revokeObjectURL(url);
+    let y = MT+10;
+    dibujarHeaderPagina();
+
+    // Resumen
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...negro);
+    const resumen = [
+      `Total a invertir: ${fmt(r.totalCompra)}`,
+      `Productos: ${lineas.length}`,
+      `Presupuesto: ${r.presupuesto>0?fmt(r.presupuesto):'Sin límite'}`,
+      `Proveedores: ${Object.keys(r.porProveedor).length}`,
+    ];
+    doc.text(resumen.join('   ·   '), ML, y);
+    y+=6;
+    if(Object.keys(r.porProveedor).length>1){
+      const porProvTxt = Object.entries(r.porProveedor).sort((a,b)=>b[1].subtotal-a[1].subtotal)
+        .map(([prov,d])=>`${prov}: ${d.items} prod. · ${fmt(d.subtotal)}`).join('   ·   ');
+      doc.setFontSize(8); doc.setTextColor(...gris);
+      doc.text(porProvTxt, ML, y, {maxWidth:tableW});
+      y+=7;
+    }
+    y+=2;
+    y = dibujarHeaderTabla(y);
+
+    const rowH=7;
+    let pagina=1;
+
+    lineas.forEach((l,i)=>{
+      if(y+rowH > H-11){
+        doc.addPage();
+        pagina++;
+        y=MT+4;
+        dibujarHeaderPagina();
+        y=dibujarHeaderTabla(y);
+      }
+      if(i%2===1){ doc.setFillColor(...grisClaro); doc.rect(ML,y,tableW,rowH,'F'); }
+      let x=ML;
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...negro);
+      cols.forEach(c=>{
+        let val;
+        switch(c.k){
+          case 'codigo': val=l.codigo; break;
+          case 'nombre': val=l.nombre+(l.incluyeEnvasado?' (+envasado)':''); break;
+          case 'proveedor': val=l.proveedor; break;
+          case 'stock': val=fmtNum(l.stock); break;
+          case 'promMensual': val=String(l.promMensual); break;
+          case 'cantAPedir': val=String(l.cantAPedir); break;
+          case 'costo': val=fmt(l.costo); break;
+          case 'subtotal': val=fmt(l.subtotal); break;
+          case 'pctGan': val=l.pctGan+'%'; break;
+          case 'urgencia': val=''; break;
+          default: val='';
+        }
+        if(c.k==='cantAPedir'||c.k==='subtotal') doc.setFont('helvetica','bold'); else doc.setFont('helvetica','normal');
+        if(c.k==='pctGan') doc.setTextColor(...(l.pctGan>=60?verde:l.pctGan>=30?amarillo:rojo));
+        else doc.setTextColor(...negro);
+        const maxW = c.w-4;
+        const lines = doc.splitTextToSize(val, maxW);
+        const tx = c.align==='right'?x+c.w-2 : c.align==='center'?x+c.w/2 : x+2;
+        doc.text(lines[0]||'', tx, y+4.7, {align:c.align});
+        if(c.k==='urgencia'){
+          const cx=x+c.w/2, cy=y+3.3;
+          doc.setFillColor(...(l.urgencia===3?rojo:l.urgencia===2?amarillo:verde));
+          doc.circle(cx,cy,1.6,'F');
+        }
+        x+=c.w;
+      });
+      // Separador de fila
+      doc.setDrawColor(220,220,220); doc.setLineWidth(0.1);
+      doc.line(ML,y+rowH,ML+tableW,y+rowH);
+      y+=rowH;
+    });
+
+    // Total
+    if(y+rowH > H-11){ doc.addPage(); pagina++; y=MT+4; dibujarHeaderPagina(); y=dibujarHeaderTabla(y); }
+    doc.setFillColor(...celeste); doc.rect(ML,y,tableW,rowH,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...negro);
+    const wSinSubtotal = cols.slice(0,7).reduce((s,c)=>s+c.w,0);
+    doc.text('TOTAL', ML+wSinSubtotal-2, y+4.7, {align:'right'});
+    const wConSubtotal = cols.slice(0,8).reduce((s,c)=>s+c.w,0);
+    doc.setTextColor(...verde);
+    doc.text(fmt(r.totalCompra), ML+wConSubtotal-2, y+4.7, {align:'right'});
+
+    const totalPaginas = doc.internal.getNumberOfPages();
+    for(let p=1;p<=totalPaginas;p++){ doc.setPage(p); dibujarPie(p,totalPaginas); }
+
+    doc.save(`recompra-pensok-${new Date().toISOString().slice(0,10)}.pdf`);
     setRcPdfLoading(false);
   }
 
@@ -6633,7 +6721,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             </div>
             <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
               <Btn variant="ghost" onClick={()=>setRcResultado(null)}>← Volver a configurar</Btn>
-              <Btn onClick={exportarRecompraPDF} disabled={rcPdfLoading}>{rcPdfLoading?"Generando...":"⬇ Exportar HTML/PDF"}</Btn>
+              <Btn onClick={exportarRecompraPDF} disabled={rcPdfLoading}>{rcPdfLoading?"Generando...":"⬇ Exportar PDF"}</Btn>
             </div>
           </div>
         )}
