@@ -314,6 +314,17 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Reporte de compra: tabla ordenable y editable antes de exportar (2026-08-27)
+
+En el mismo modal de "🛒 Reporte de compra" (`ModuloProductos`), Pablo pidió poder ajustar el resultado antes de mandarlo a cotizar — no solo generarlo y exportarlo tal cual.
+
+- **Encabezados ordenables**: click en cualquier columna (Código, Producto, Proveedor, Stock, Prom/mes, A pedir, Costo, Subtotal, % Gan, Urgencia) ordena la tabla por esa columna — mismo patrón visual (`⇅`/`↑`/`↓`) que la tabla principal de productos, pero con estado propio (`rcSortCol`/`rcSortDir`/`rcToggleSort`/`RcSortIcon`) para no pisar el de esa otra tabla.
+- **Cantidad "A pedir" editable** inline (`rcCambiarCantidad`): al cambiarla, recalcula el subtotal de esa línea y los totales (`totalCompra`, `porProveedor`) sin volver a correr el análisis de historial completo.
+- **Quitar un producto del reporte** (✕ al final de cada fila, `rcEliminarLinea`): saca la línea y recalcula los totales igual que al cambiar cantidad.
+- Ambas operaciones reutilizan `recalcularResultado(prev,lineas)`, que reconstruye `totalCompra`/`porProveedor` a partir de la lista de líneas editada.
+- El **HTML/PDF exportado ahora sale en el mismo orden en que se está viendo la tabla en pantalla** (`rcLineasOrdenadas` en vez de `rcResultado.lineas` directo) — lo que ve es lo que se manda a cotizar.
+- Es edición solo de la vista previa, no persiste nada en la base — si se cierra el modal y se vuelve a generar, se recalcula todo desde cero.
+
 ## Reporte de compra: ahora considera la demanda por envasado (2026-08-27)
 
 Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en `ModuloProductos`): calculaba cuánto pedir de cada producto mirando **solo sus propias ventas directas** (matcheadas por nombre contra `venta_items`). Para un producto que se compra a granel y se reenvasa en otro (ej. bidón de 5L de un proveedor → botella de 1L propia, vínculo `granel_id`/`consumo_granel`, ver "Productos a granel" más arriba), si el granel casi no se vende directo (todo se reenvasa), el reporte lo excluía por "sin historial" — aunque haya demanda real y alta escondida en las ventas de lo ya envasado, y terminaba faltando pedir del granel.

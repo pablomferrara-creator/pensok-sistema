@@ -6065,10 +6065,61 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     setRcGenerando(false);
   }
 
+  // Recalcula totalCompra/porProveedor a partir de una lista de líneas editada a mano (cambiar
+  // cantidad o eliminar un producto) -- sin volver a correr todo el análisis de historial.
+  function recalcularResultado(prev,lineas){
+    const totalCompra = lineas.reduce((s,l)=>s+l.subtotal,0);
+    const porProveedor = {};
+    lineas.forEach(l=>{
+      if(!porProveedor[l.proveedor]) porProveedor[l.proveedor]={items:0,subtotal:0};
+      porProveedor[l.proveedor].items++;
+      porProveedor[l.proveedor].subtotal+=l.subtotal;
+    });
+    return {...prev, lineas, totalCompra, porProveedor};
+  }
+  function rcCambiarCantidad(id,nuevaCant){
+    const cant = Math.max(0,parseInt(nuevaCant)||0);
+    setRcResultado(prev=>{
+      if(!prev) return prev;
+      const lineas = prev.lineas.map(l=>l.id===id?{...l,cantAPedir:cant,subtotal:cant*l.costo}:l);
+      return recalcularResultado(prev,lineas);
+    });
+  }
+  function rcEliminarLinea(id){
+    setRcResultado(prev=>{
+      if(!prev) return prev;
+      return recalcularResultado(prev,prev.lineas.filter(l=>l.id!==id));
+    });
+  }
+
+  // Orden de la tabla del reporte -- no toca el orden original (por score) que usa el PDF si
+  // no se tocó ninguna columna; una vez que se ordena, se exporta en ese mismo orden.
+  const [rcSortCol,setRcSortCol]=useState(null);
+  const [rcSortDir,setRcSortDir]=useState("asc");
+  function rcToggleSort(col){
+    if(rcSortCol===col) setRcSortDir(d=>d==="asc"?"desc":"asc");
+    else { setRcSortCol(col); setRcSortDir("asc"); }
+  }
+  const rcLineasOrdenadas = useMemo(()=>{
+    if(!rcResultado) return [];
+    if(!rcSortCol) return rcResultado.lineas;
+    const arr=[...rcResultado.lineas];
+    arr.sort((a,b)=>{
+      const va=a[rcSortCol], vb=b[rcSortCol];
+      const cmp = typeof va==="string" ? va.localeCompare(vb) : va-vb;
+      return rcSortDir==="asc"?cmp:-cmp;
+    });
+    return arr;
+  },[rcResultado,rcSortCol,rcSortDir]);
+  function RcSortIcon({col}){
+    if(rcSortCol!==col)return <span style={{color:G.borde,marginLeft:4}}>⇅</span>;
+    return <span style={{color:G.verde,marginLeft:4}}>{rcSortDir==="asc"?"↑":"↓"}</span>;
+  }
+
   async function exportarRecompraPDF(){
     setRcPdfLoading(true);
     const r = rcResultado;
-    const rows = r.lineas.map(l=>`
+    const rows = rcLineasOrdenadas.map(l=>`
       <tr>
         <td>${l.codigo}</td>
         <td>${l.nombre}${l.incluyeEnvasado?' <span style="color:#4D9EFF;font-size:10px">♻ +envasado</span>':''}</td>
@@ -6541,30 +6592,41 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead>
                   <tr style={{background:G.sup2,position:"sticky",top:0}}>
-                    {["Código","Producto","Proveedor","Stock","Prom/mes","A pedir","Costo","Subtotal","% Gan","Urgencia"].map(h=>(
-                      <th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`}}>{h}</th>
+                    {[
+                      {h:"Código",col:"codigo"},{h:"Producto",col:"nombre"},{h:"Proveedor",col:"proveedor"},
+                      {h:"Stock",col:"stock"},{h:"Prom/mes",col:"promMensual"},{h:"A pedir",col:"cantAPedir"},
+                      {h:"Costo",col:"costo"},{h:"Subtotal",col:"subtotal"},{h:"% Gan",col:"pctGan"},{h:"Urgencia",col:"urgencia"},
+                    ].map(({h,col})=>(
+                      <th key={h} onClick={()=>rcToggleSort(col)} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`,cursor:"pointer",userSelect:"none"}}>{h}<RcSortIcon col={col}/></th>
                     ))}
+                    <th style={{padding:"8px 10px",borderBottom:`1px solid ${G.borde}`}}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rcResultado.lineas.map((l,i)=>(
+                  {rcLineasOrdenadas.map((l,i)=>(
                     <tr key={l.id} style={{borderBottom:`1px solid ${G.borde}22`,background:i%2===0?"transparent":G.sup2+"44"}}>
                       <td style={{padding:"7px 10px",fontFamily:"DM Mono,monospace",fontSize:10,color:G.textoSec}}>{l.codigo}</td>
                       <td style={{padding:"7px 10px",fontWeight:500,maxWidth:200}}>{l.nombre}{l.incluyeEnvasado&&<span title="Incluye la demanda de lo que se vende ya envasado a partir de este producto" style={{marginLeft:6,fontSize:10,color:G.azul}}>♻ +envasado</span>}</td>
                       <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stock)}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",color:G.textoSec,fontFamily:"DM Mono,monospace"}}>{l.promMensual}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center",fontWeight:700,color:G.verde,fontFamily:"DM Mono,monospace",fontSize:14}}>{l.cantAPedir}</td>
+                      <td style={{padding:"7px 10px",textAlign:"center"}}>
+                        <input type="number" min="0" value={l.cantAPedir} onChange={e=>rcCambiarCantidad(l.id,e.target.value)}
+                          style={{width:56,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 6px",color:G.verde,fontWeight:700,fontFamily:"DM Mono,monospace",fontSize:13,textAlign:"center",outline:"none"}}/>
+                      </td>
                       <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{fmt(l.costo)}</td>
                       <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap"}}>{fmt(l.subtotal)}</td>
                       <td style={{padding:"7px 10px",textAlign:"center",color:l.pctGan>=60?G.verde:l.pctGan>=30?G.amarillo:G.rojo,fontFamily:"DM Mono,monospace"}}>{l.pctGan}%</td>
                       <td style={{padding:"7px 10px",textAlign:"center",fontSize:16}}>{l.urgencia===3?"🔴":l.urgencia===2?"🟡":"🟢"}</td>
+                      <td style={{padding:"7px 10px",textAlign:"center"}}>
+                        <button onClick={()=>rcEliminarLinea(l.id)} title="Quitar del reporte" style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                      </td>
                     </tr>
                   ))}
                   <tr style={{borderTop:`2px solid ${G.borde}`,background:G.sup2}}>
                     <td colSpan={7} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,fontSize:12}}>TOTAL</td>
                     <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"DM Mono,monospace",color:G.verde,fontSize:14}}>{fmt(rcResultado.totalCompra)}</td>
-                    <td colSpan={2}></td>
+                    <td colSpan={3}></td>
                   </tr>
                 </tbody>
               </table>
