@@ -314,6 +314,20 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Reporte de compra: segundo modo "Por stock mínimo" (2026-08-27)
+
+Pablo pidió una segunda forma de generar el reporte, más simple que la "Inteligente" (por historial de ventas): elegir un proveedor, listar solo lo que está bajo/agotado stock, y que sugiera cuánto pedir **para cada local por separado** (según el stock mínimo propio de cada uno) — para saber de entrada cuánto separar para Caamaño cuando llega el pedido y cargarlo más fácil en Traspasos.
+
+- **Selector de modo** arriba del formulario del modal (`rcModo`: `"inteligente"` | `"stockMinimo"`), cada uno con su propio formulario de configuración. El modo "Por stock mínimo" solo pide el proveedor (o "Todos").
+- **`calcularPorStockMinimo()`** (nueva, async): trae los productos activos del otro local por `supabaseOtro` (`codigo, stock, stock_min`) y arma un mapa por código. Para cada producto propio (filtrado por proveedor si corresponde):
+  - `pedirPilar = stock_min propio>0 ? max(0, stock_min − stock) : 0` (mismo criterio de siempre: `stock_min=0` = nunca pedir para ese local).
+  - `pedirCaamanio` = igual pero con el `stock`/`stock_min` **propios de Caamaño** para ese código (no comparte mínimo con Pilar — cada local tiene el suyo).
+  - Si `pedirPilar+pedirCaamanio<=0` el producto no entra al reporte (no le hace falta a ninguno de los dos).
+  - Urgencia: rojo si algún local está en 0 y le hace falta; amarillo si alguno está en o por debajo de su mínimo; verde en el resto.
+- **Tabla de resultados con columnas separadas por local**: Stock Pilar / Pedir Pilar (editable) / Stock Caamaño / Pedir Caamaño (editable) / Total (suma, no editable directo) / Costo / Subtotal / Urg. `rcCambiarCantidadSplit(id,campo,valor)` edita un lado puntual y recalcula el total y el subtotal de esa línea.
+- El PDF (mismo `exportarRecompraPDF`, ahora bifurcado por `rcResultado.modo`) usa las mismas columnas por local, en A4 horizontal.
+- Reutiliza toda la infraestructura ya armada para el modo inteligente: ordenar por columna (`rcToggleSort`/`RcSortIcon`), eliminar una línea (`rcEliminarLinea`), recalcular totales/proveedores (`recalcularResultado`) — todo agnóstico a la forma exacta de cada línea, solo necesita `.id`/`.subtotal`/`.proveedor`.
+
 ## Reporte de compra: suma también la demanda de Caamaño (2026-08-27)
 
 Pablo confirmó que **Caamaño se abastece 100% por Traspasos desde Pilar** (no compra directo a proveedores) — así que la demanda real que Pilar tiene que cubrir comprando es la de sus propias ventas **más** lo que después le traspasa a Caamaño. `calcularRecompra` (`ModuloProductos`) ahora suma las ventas de Caamaño a la misma bolsa `ventasPorNombre` que ya usa para las propias.

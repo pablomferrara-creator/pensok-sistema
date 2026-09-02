@@ -5913,6 +5913,10 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   // Caamaño se abastece por Traspasos desde acá (confirmado con Pablo), así que sus ventas
   // cuentan como demanda real a la hora de decidir cuánto comprar -- por defecto incluidas.
   const [rcIncluirOtro,    setRcIncluirOtro]    = useState(true);
+  // "inteligente" = por historial de ventas (el original). "stockMinimo" = por proveedor,
+  // solo lo que esté bajo mínimo acá y/o en el otro local, con la cantidad sugerida separada
+  // por local -- para saber de entrada cuánto traspasar cuando llegue el pedido.
+  const [rcModo,           setRcModo]           = useState("inteligente");
   const [rcGenerando,      setRcGenerando]      = useState(false);
   const [rcPdfLoading,     setRcPdfLoading]     = useState(false);
 
@@ -6087,6 +6091,66 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     setRcGenerando(false);
   }
 
+  // Modo "por stock mínimo": lista los productos de un proveedor bajo su stock mínimo (acá y/o
+  // en el otro local) y sugiere cuánto pedir para CADA local por separado -- según el stock
+  // mínimo propio de cada uno, no un único mínimo compartido. Un producto con stock_min=0 en un
+  // local nunca dispara pedido para ESE local (mismo criterio que estadoStock en toda la app).
+  async function calcularPorStockMinimo(){
+    setRcGenerando(true);
+    let productosOtro = [];
+    try{
+      const {data} = await supabaseOtro.from("productos").select("codigo,stock,stock_min").eq("activo",true);
+      productosOtro = data||[];
+    }catch(e){ console.warn(`No se pudieron cargar los productos de ${LOCALES[otroLocalKey].nombre}:`,e); }
+    const otroPorCodigo = {};
+    productosOtro.forEach(p=>{ if(p.codigo) otroPorCodigo[p.codigo]=p; });
+
+    const lineas = [];
+    productos.filter(p=>p.activo&&p.costo>0).forEach(p=>{
+      if(rcProveedor!=="Todos"&&(p.proveedor||"")!==rcProveedor) return;
+
+      const stockMinPilar = p.stock_min||0;
+      const pedirPilar = stockMinPilar>0 ? Math.max(0,stockMinPilar-(p.stock||0)) : 0;
+
+      const otro = otroPorCodigo[p.codigo];
+      const stockCaamanio = otro?.stock||0;
+      const stockMinCaamanio = otro?.stock_min||0;
+      const pedirCaamanio = (otro&&stockMinCaamanio>0) ? Math.max(0,stockMinCaamanio-stockCaamanio) : 0;
+
+      const cantAPedir = pedirPilar+pedirCaamanio;
+      if(cantAPedir<=0) return; // ninguno de los dos locales lo necesita
+
+      const urgente = p.stock===0 || (otro&&stockMinCaamanio>0&&stockCaamanio===0);
+      const bajo    = p.stock<=stockMinPilar || (otro&&stockMinCaamanio>0&&stockCaamanio<=stockMinCaamanio);
+
+      lineas.push({
+        id: p.id, codigo: p.codigo, nombre: p.nombre, proveedor: p.proveedor||"—", costo: p.costo,
+        stockPilar: p.stock||0, stockMinPilar,
+        stockCaamanio, stockMinCaamanio, tieneOtro: !!otro,
+        pedirPilar, pedirCaamanio, cantAPedir,
+        subtotal: cantAPedir*p.costo,
+        urgencia: urgente?3:bajo?2:1,
+      });
+    });
+    lineas.sort((a,b)=>b.urgencia-a.urgencia || b.subtotal-a.subtotal);
+
+    const porProveedor = {};
+    lineas.forEach(l=>{
+      if(!porProveedor[l.proveedor]) porProveedor[l.proveedor]={items:0,subtotal:0};
+      porProveedor[l.proveedor].items++;
+      porProveedor[l.proveedor].subtotal+=l.subtotal;
+    });
+    const totalCompra = lineas.reduce((s,l)=>s+l.subtotal,0);
+
+    setRcResultado({
+      modo: "stockMinimo",
+      lineas, totalCompra, porProveedor,
+      generadoEn: new Date().toLocaleString("es-AR"),
+      presupuesto: 0,
+    });
+    setRcGenerando(false);
+  }
+
   // Recalcula totalCompra/porProveedor a partir de una lista de líneas editada a mano (cambiar
   // cantidad o eliminar un producto) -- sin volver a correr todo el análisis de historial.
   function recalcularResultado(prev,lineas){
@@ -6104,6 +6168,21 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     setRcResultado(prev=>{
       if(!prev) return prev;
       const lineas = prev.lineas.map(l=>l.id===id?{...l,cantAPedir:cant,subtotal:cant*l.costo}:l);
+      return recalcularResultado(prev,lineas);
+    });
+  }
+  // Modo "stockMinimo": edita la cantidad de UN local puntual (pedirPilar o pedirCaamanio) --
+  // el total (cantAPedir) y el subtotal se recalculan como la suma de los dos.
+  function rcCambiarCantidadSplit(id,campo,nuevaCant){
+    const cant = Math.max(0,parseInt(nuevaCant)||0);
+    setRcResultado(prev=>{
+      if(!prev) return prev;
+      const lineas = prev.lineas.map(l=>{
+        if(l.id!==id) return l;
+        const actualizada = {...l,[campo]:cant};
+        const cantAPedir = actualizada.pedirPilar+actualizada.pedirCaamanio;
+        return {...actualizada, cantAPedir, subtotal:cantAPedir*l.costo};
+      });
       return recalcularResultado(prev,lineas);
     });
   }
@@ -6162,7 +6241,20 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     // Columnas: {label, w, align}
     // A pedir va justo después de Proveedor (a pedido de Pablo); Stock, Prom/mes y % Gan no
     // se muestran en el PDF (siguen calculándose y se pueden ver/ordenar en la tabla en pantalla).
-    const cols = [
+    const esStockMinimo = r.modo==="stockMinimo";
+    const cols = esStockMinimo ? [
+      {k:'codigo',    label:'Código',    w:20, align:'left'},
+      {k:'nombre',    label:'Producto',  w:59, align:'left'},
+      {k:'proveedor', label:'Proveedor', w:27, align:'left'},
+      {k:'stockPilar',label:`Stock ${LOCALES[localKey].nombre.replace('Pensok ','')}`, w:24, align:'center'},
+      {k:'pedirPilar',label:'Pedir',     w:16, align:'center'},
+      {k:'stockCaamanio',label:`Stock ${LOCALES[otroLocalKey].nombre.replace('Pensok ','')}`, w:24, align:'center'},
+      {k:'pedirCaamanio',label:'Pedir',  w:16, align:'center'},
+      {k:'cantAPedir',label:'Total',     w:18, align:'center'},
+      {k:'costo',     label:'Costo',     w:24, align:'right'},
+      {k:'subtotal',  label:'Subtotal',  w:28, align:'right'},
+      {k:'urgencia',  label:'Urg.',      w:14, align:'center'},
+    ] : [
       {k:'codigo',    label:'Código',    w:22, align:'left'},
       {k:'nombre',    label:'Producto',  w:88, align:'left'},
       {k:'proveedor', label:'Proveedor', w:38, align:'left'},
@@ -6181,15 +6273,18 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       doc.rect(0,0,W,MT+2,'F');
       doc.setTextColor(...negro);
       doc.setFont('helvetica','bold'); doc.setFontSize(13);
-      doc.text('Reporte de Compra Inteligente — Pensok', ML, 9);
+      doc.text(esStockMinimo?'Reporte de Compra — Por Stock Mínimo — Pensok':'Reporte de Compra Inteligente — Pensok', ML, 9);
       doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...gris);
-      doc.text(`Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?'es':''}${r.incluyoOtro?` · Incluye demanda de ${LOCALES[otroLocalKey].nombre}`:''}`, ML, 14.5);
+      const subt = esStockMinimo
+        ? `Generado el ${r.generadoEn} · Cantidad sugerida por local según el stock mínimo propio de ${LOCALES[localKey].nombre} y ${LOCALES[otroLocalKey].nombre}`
+        : `Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?'es':''}${r.incluyoOtro?` · Incluye demanda de ${LOCALES[otroLocalKey].nombre}`:''}`;
+      doc.text(subt, ML, 14.5);
     }
     function dibujarPie(pagina,totalPaginas){
       doc.setFillColor(...celeste);
       doc.rect(0,H-9,W,9,'F');
       doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...gris);
-      doc.text('Pensok · Reporte generado automáticamente en base al historial de ventas', ML, H-3.5);
+      doc.text(`Pensok · Reporte generado automáticamente ${esStockMinimo?'en base al stock mínimo cargado':'en base al historial de ventas'}`, ML, H-3.5);
       doc.text(`Página ${pagina} de ${totalPaginas}`, W-MR, H-3.5, {align:'right'});
     }
     function dibujarHeaderTabla(y){
@@ -6213,7 +6308,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     const resumen = [
       `Total a invertir: ${fmt(r.totalCompra)}`,
       `Productos: ${lineas.length}`,
-      `Presupuesto: ${r.presupuesto>0?fmt(r.presupuesto):'Sin límite'}`,
+      esStockMinimo ? `Modo: Stock mínimo` : `Presupuesto: ${r.presupuesto>0?fmt(r.presupuesto):'Sin límite'}`,
       `Proveedores: ${Object.keys(r.porProveedor).length}`,
     ];
     doc.text(resumen.join('   ·   '), ML, y);
@@ -6248,6 +6343,10 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
           case 'codigo': val=l.codigo; break;
           case 'nombre': val=l.nombre+(l.incluyeEnvasado?' (+envasado)':''); break;
           case 'proveedor': val=l.proveedor; break;
+          case 'stockPilar': val=fmtNum(l.stockPilar); break;
+          case 'pedirPilar': val=String(l.pedirPilar); break;
+          case 'stockCaamanio': val=l.tieneOtro?fmtNum(l.stockCaamanio):'—'; break;
+          case 'pedirCaamanio': val=String(l.pedirCaamanio); break;
           case 'cantAPedir': val=String(l.cantAPedir); break;
           case 'costo': val=fmt(l.costo); break;
           case 'subtotal': val=fmt(l.subtotal); break;
@@ -6651,26 +6750,40 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     </div>
     {/* ── MODAL REPORTE DE COMPRA INTELIGENTE ── */}
     {modalRecompra&&(
-      <Modal onClose={()=>setModalRecompra(false)} title="🛒 Reporte de Compra Inteligente" maxWidth={1100}>
+      <Modal onClose={()=>setModalRecompra(false)} title="🛒 Reporte de Compra" maxWidth={1100}>
         {!rcResultado?(
           <div style={{display:"flex",flexDirection:"column",gap:16,minWidth:340}}>
-            <div style={{fontSize:13,color:G.textoSec,lineHeight:1.5}}>
-              El sistema analizará las ventas de los últimos N meses + los mismos meses del año anterior para proyectar qué y cuánto comprar.
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setRcModo("inteligente")} style={{flex:1,background:rcModo==="inteligente"?G.verde:G.sup2,color:rcModo==="inteligente"?"#000":G.textoSec,border:`1px solid ${rcModo==="inteligente"?G.verde:G.borde}`,borderRadius:8,padding:"8px 10px",fontSize:12,fontWeight:600,cursor:"pointer"}}>🧠 Inteligente (historial de ventas)</button>
+              <button onClick={()=>setRcModo("stockMinimo")} style={{flex:1,background:rcModo==="stockMinimo"?G.verde:G.sup2,color:rcModo==="stockMinimo"?"#000":G.textoSec,border:`1px solid ${rcModo==="stockMinimo"?G.verde:G.borde}`,borderRadius:8,padding:"8px 10px",fontSize:12,fontWeight:600,cursor:"pointer"}}>📦 Por stock mínimo</button>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <Fi label="Meses de historial" value={rcMesesHistorial} onChange={setRcMesesHistorial} type="number" options={["1","2","3","4","6"]}/>
-              <Fi label="Proyección (meses)" value={rcMesesProyeccion} onChange={setRcMesesProyeccion} type="number" options={["1","2","3"]}/>
-            </div>
-            <Fi label="Proveedor (opcional)" value={rcProveedor} onChange={setRcProveedor} options={["Todos",...provsUnicos.filter(p=>p!=="Todos")]}/>
-            <Fi label="Presupuesto disponible (vacío = sin límite)" value={rcPresupuesto} onChange={setRcPresupuesto} type="number" placeholder="Ej: 500000"/>
-            {rcPresupuesto&&<div style={{fontSize:11,color:G.textoSec}}>Con presupuesto el sistema priorizará los productos más rentables y urgentes.</div>}
-            <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer"}}>
-              <input type="checkbox" checked={rcIncluirOtro} onChange={e=>setRcIncluirOtro(e.target.checked)}/>
-              Incluir también las ventas de {LOCALES[otroLocalKey].nombre} en la demanda
-            </label>
-            <Btn full onClick={calcularRecompra} disabled={rcGenerando}>
-              {rcGenerando?"Calculando...":"Generar reporte"}
-            </Btn>
+            {rcModo==="inteligente"?(<>
+              <div style={{fontSize:13,color:G.textoSec,lineHeight:1.5}}>
+                El sistema analizará las ventas de los últimos N meses + los mismos meses del año anterior para proyectar qué y cuánto comprar.
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <Fi label="Meses de historial" value={rcMesesHistorial} onChange={setRcMesesHistorial} type="number" options={["1","2","3","4","6"]}/>
+                <Fi label="Proyección (meses)" value={rcMesesProyeccion} onChange={setRcMesesProyeccion} type="number" options={["1","2","3"]}/>
+              </div>
+              <Fi label="Proveedor (opcional)" value={rcProveedor} onChange={setRcProveedor} options={["Todos",...provsUnicos.filter(p=>p!=="Todos")]}/>
+              <Fi label="Presupuesto disponible (vacío = sin límite)" value={rcPresupuesto} onChange={setRcPresupuesto} type="number" placeholder="Ej: 500000"/>
+              {rcPresupuesto&&<div style={{fontSize:11,color:G.textoSec}}>Con presupuesto el sistema priorizará los productos más rentables y urgentes.</div>}
+              <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer"}}>
+                <input type="checkbox" checked={rcIncluirOtro} onChange={e=>setRcIncluirOtro(e.target.checked)}/>
+                Incluir también las ventas de {LOCALES[otroLocalKey].nombre} en la demanda
+              </label>
+              <Btn full onClick={calcularRecompra} disabled={rcGenerando}>
+                {rcGenerando?"Calculando...":"Generar reporte"}
+              </Btn>
+            </>):(<>
+              <div style={{fontSize:13,color:G.textoSec,lineHeight:1.5}}>
+                Lista los productos de un proveedor que estén bajo su stock mínimo (acá y/o en {LOCALES[otroLocalKey].nombre}), y sugiere cuánto pedir para cada local por separado según el stock mínimo cargado en cada uno — para saber de entrada cuánto separar cuando llegue el pedido.
+              </div>
+              <Fi label="Proveedor" value={rcProveedor} onChange={setRcProveedor} options={["Todos",...provsUnicos.filter(p=>p!=="Todos")]}/>
+              <Btn full onClick={calcularPorStockMinimo} disabled={rcGenerando}>
+                {rcGenerando?"Calculando...":"Generar reporte"}
+              </Btn>
+            </>)}
           </div>
         ):(
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -6678,7 +6791,9 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               {[
                 {l:"Total a invertir",v:fmt(rcResultado.totalCompra),c:G.verde},
                 {l:"Productos",v:rcResultado.lineas.length,c:G.texto},
-                {l:"Presupuesto",v:rcResultado.presupuesto>0?fmt(rcResultado.presupuesto):"Sin límite",c:G.textoSec},
+                rcResultado.modo==="stockMinimo"
+                  ? {l:"Modo",v:"Stock mínimo",c:G.textoSec}
+                  : {l:"Presupuesto",v:rcResultado.presupuesto>0?fmt(rcResultado.presupuesto):"Sin límite",c:G.textoSec},
                 {l:"Proveedores",v:Object.keys(rcResultado.porProveedor).length,c:G.texto},
               ].map(x=>(
                 <div key={x.l} style={{background:G.sup2,borderRadius:8,padding:"10px 14px"}}>
@@ -6687,7 +6802,11 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                 </div>
               ))}
             </div>
-            <div style={{fontSize:11,color:G.textoSec}}>{rcResultado.incluyoOtro?`Incluye la demanda de ${LOCALES[otroLocalKey].nombre}`:`No incluye ${LOCALES[otroLocalKey].nombre}`}</div>
+            <div style={{fontSize:11,color:G.textoSec}}>
+              {rcResultado.modo==="stockMinimo"
+                ? `Cantidad sugerida por local según el stock mínimo propio de cada uno (${LOCALES[localKey].nombre} y ${LOCALES[otroLocalKey].nombre})`
+                : (rcResultado.incluyoOtro?`Incluye la demanda de ${LOCALES[otroLocalKey].nombre}`:`No incluye ${LOCALES[otroLocalKey].nombre}`)}
+            </div>
             {Object.keys(rcResultado.porProveedor).length>1&&(
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                 {Object.entries(rcResultado.porProveedor).sort((a,b)=>b[1].subtotal-a[1].subtotal).map(([prov,d])=>(
@@ -6700,47 +6819,96 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               </div>
             )}
             <div style={{overflowX:"auto",maxHeight:"65vh",overflowY:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead>
-                  <tr style={{background:G.sup2,position:"sticky",top:0}}>
-                    {[
-                      {h:"Código",col:"codigo"},{h:"Producto",col:"nombre"},{h:"Proveedor",col:"proveedor"},
-                      {h:"Stock",col:"stock"},{h:"Prom/mes",col:"promMensual"},{h:"A pedir",col:"cantAPedir"},
-                      {h:"Costo",col:"costo"},{h:"Subtotal",col:"subtotal"},{h:"% Gan",col:"pctGan"},{h:"Urgencia",col:"urgencia"},
-                    ].map(({h,col})=>(
-                      <th key={h} onClick={()=>rcToggleSort(col)} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`,cursor:"pointer",userSelect:"none"}}>{h}<RcSortIcon col={col}/></th>
-                    ))}
-                    <th style={{padding:"8px 10px",borderBottom:`1px solid ${G.borde}`}}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rcLineasOrdenadas.map((l,i)=>(
-                    <tr key={l.id} style={{borderBottom:`1px solid ${G.borde}22`,background:i%2===0?"transparent":G.sup2+"44"}}>
-                      <td style={{padding:"7px 10px",fontFamily:"DM Mono,monospace",fontSize:10,color:G.textoSec}}>{l.codigo}</td>
-                      <td style={{padding:"7px 10px",fontWeight:500,maxWidth:200}}>{l.nombre}{l.incluyeEnvasado&&<span title="Incluye la demanda de lo que se vende ya envasado a partir de este producto" style={{marginLeft:6,fontSize:10,color:G.azul}}>♻ +envasado</span>}</td>
-                      <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stock)}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center",color:G.textoSec,fontFamily:"DM Mono,monospace"}}>{l.promMensual}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center"}}>
-                        <input type="number" min="0" value={l.cantAPedir} onChange={e=>rcCambiarCantidad(l.id,e.target.value)}
-                          style={{width:56,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 6px",color:G.verde,fontWeight:700,fontFamily:"DM Mono,monospace",fontSize:13,textAlign:"center",outline:"none"}}/>
-                      </td>
-                      <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{fmt(l.costo)}</td>
-                      <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap"}}>{fmt(l.subtotal)}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center",color:l.pctGan>=60?G.verde:l.pctGan>=30?G.amarillo:G.rojo,fontFamily:"DM Mono,monospace"}}>{l.pctGan}%</td>
-                      <td style={{padding:"7px 10px",textAlign:"center",fontSize:16}}>{l.urgencia===3?"🔴":l.urgencia===2?"🟡":"🟢"}</td>
-                      <td style={{padding:"7px 10px",textAlign:"center"}}>
-                        <button onClick={()=>rcEliminarLinea(l.id)} title="Quitar del reporte" style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-                      </td>
+              {rcResultado.modo==="stockMinimo"?(
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:G.sup2,position:"sticky",top:0}}>
+                      {[
+                        {h:"Código",col:"codigo"},{h:"Producto",col:"nombre"},{h:"Proveedor",col:"proveedor"},
+                        {h:`Stock ${LOCALES[localKey].nombre.replace("Pensok ","")}`,col:"stockPilar"},{h:"Pedir",col:"pedirPilar"},
+                        {h:`Stock ${LOCALES[otroLocalKey].nombre.replace("Pensok ","")}`,col:"stockCaamanio"},{h:"Pedir",col:"pedirCaamanio"},
+                        {h:"Total",col:"cantAPedir"},{h:"Costo",col:"costo"},{h:"Subtotal",col:"subtotal"},{h:"Urg.",col:"urgencia"},
+                      ].map(({h,col})=>(
+                        <th key={col} onClick={()=>rcToggleSort(col)} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`,cursor:"pointer",userSelect:"none"}}>{h}<RcSortIcon col={col}/></th>
+                      ))}
+                      <th style={{padding:"8px 10px",borderBottom:`1px solid ${G.borde}`}}></th>
                     </tr>
-                  ))}
-                  <tr style={{borderTop:`2px solid ${G.borde}`,background:G.sup2}}>
-                    <td colSpan={7} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,fontSize:12}}>TOTAL</td>
-                    <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"DM Mono,monospace",color:G.verde,fontSize:14}}>{fmt(rcResultado.totalCompra)}</td>
-                    <td colSpan={3}></td>
-                  </tr>
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {rcLineasOrdenadas.map((l,i)=>(
+                      <tr key={l.id} style={{borderBottom:`1px solid ${G.borde}22`,background:i%2===0?"transparent":G.sup2+"44"}}>
+                        <td style={{padding:"7px 10px",fontFamily:"DM Mono,monospace",fontSize:10,color:G.textoSec}}>{l.codigo}</td>
+                        <td style={{padding:"7px 10px",fontWeight:500,maxWidth:180}}>{l.nombre}</td>
+                        <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center",color:l.stockPilar===0?G.rojo:l.stockPilar<=l.stockMinPilar?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stockPilar)}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center"}}>
+                          <input type="number" min="0" value={l.pedirPilar} onChange={e=>rcCambiarCantidadSplit(l.id,'pedirPilar',e.target.value)}
+                            style={{width:48,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 4px",color:G.texto,fontWeight:600,fontFamily:"DM Mono,monospace",fontSize:12,textAlign:"center",outline:"none"}}/>
+                        </td>
+                        <td style={{padding:"7px 10px",textAlign:"center",color:!l.tieneOtro?G.textoSec:l.stockCaamanio===0?G.rojo:l.stockCaamanio<=l.stockMinCaamanio?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{l.tieneOtro?fmtNum(l.stockCaamanio):"—"}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center"}}>
+                          <input type="number" min="0" value={l.pedirCaamanio} onChange={e=>rcCambiarCantidadSplit(l.id,'pedirCaamanio',e.target.value)}
+                            style={{width:48,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 4px",color:G.texto,fontWeight:600,fontFamily:"DM Mono,monospace",fontSize:12,textAlign:"center",outline:"none"}}/>
+                        </td>
+                        <td style={{padding:"7px 10px",textAlign:"center",fontWeight:700,color:G.verde,fontFamily:"DM Mono,monospace",fontSize:14}}>{l.cantAPedir}</td>
+                        <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{fmt(l.costo)}</td>
+                        <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap"}}>{fmt(l.subtotal)}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center",fontSize:16}}>{l.urgencia===3?"🔴":l.urgencia===2?"🟡":"🟢"}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center"}}>
+                          <button onClick={()=>rcEliminarLinea(l.id)} title="Quitar del reporte" style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{borderTop:`2px solid ${G.borde}`,background:G.sup2}}>
+                      <td colSpan={8} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,fontSize:12}}>TOTAL</td>
+                      <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"DM Mono,monospace",color:G.verde,fontSize:14}}>{fmt(rcResultado.totalCompra)}</td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tbody>
+                </table>
+              ):(
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:G.sup2,position:"sticky",top:0}}>
+                      {[
+                        {h:"Código",col:"codigo"},{h:"Producto",col:"nombre"},{h:"Proveedor",col:"proveedor"},
+                        {h:"Stock",col:"stock"},{h:"Prom/mes",col:"promMensual"},{h:"A pedir",col:"cantAPedir"},
+                        {h:"Costo",col:"costo"},{h:"Subtotal",col:"subtotal"},{h:"% Gan",col:"pctGan"},{h:"Urgencia",col:"urgencia"},
+                      ].map(({h,col})=>(
+                        <th key={h} onClick={()=>rcToggleSort(col)} style={{padding:"8px 10px",textAlign:"left",fontSize:10,color:G.textoSec,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap",borderBottom:`1px solid ${G.borde}`,cursor:"pointer",userSelect:"none"}}>{h}<RcSortIcon col={col}/></th>
+                      ))}
+                      <th style={{padding:"8px 10px",borderBottom:`1px solid ${G.borde}`}}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rcLineasOrdenadas.map((l,i)=>(
+                      <tr key={l.id} style={{borderBottom:`1px solid ${G.borde}22`,background:i%2===0?"transparent":G.sup2+"44"}}>
+                        <td style={{padding:"7px 10px",fontFamily:"DM Mono,monospace",fontSize:10,color:G.textoSec}}>{l.codigo}</td>
+                        <td style={{padding:"7px 10px",fontWeight:500,maxWidth:200}}>{l.nombre}{l.incluyeEnvasado&&<span title="Incluye la demanda de lo que se vende ya envasado a partir de este producto" style={{marginLeft:6,fontSize:10,color:G.azul}}>♻ +envasado</span>}</td>
+                        <td style={{padding:"7px 10px",fontSize:11,color:G.textoSec,whiteSpace:"nowrap"}}>{l.proveedor}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center",color:l.stock===0?G.rojo:l.stock<=l.stock_min?G.amarillo:G.texto,fontFamily:"DM Mono,monospace"}}>{fmtNum(l.stock)}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center",color:G.textoSec,fontFamily:"DM Mono,monospace"}}>{l.promMensual}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center"}}>
+                          <input type="number" min="0" value={l.cantAPedir} onChange={e=>rcCambiarCantidad(l.id,e.target.value)}
+                            style={{width:56,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 6px",color:G.verde,fontWeight:700,fontFamily:"DM Mono,monospace",fontSize:13,textAlign:"center",outline:"none"}}/>
+                        </td>
+                        <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",color:G.textoSec,whiteSpace:"nowrap"}}>{fmt(l.costo)}</td>
+                        <td style={{padding:"7px 10px",textAlign:"right",fontFamily:"DM Mono,monospace",fontWeight:600,whiteSpace:"nowrap"}}>{fmt(l.subtotal)}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center",color:l.pctGan>=60?G.verde:l.pctGan>=30?G.amarillo:G.rojo,fontFamily:"DM Mono,monospace"}}>{l.pctGan}%</td>
+                        <td style={{padding:"7px 10px",textAlign:"center",fontSize:16}}>{l.urgencia===3?"🔴":l.urgencia===2?"🟡":"🟢"}</td>
+                        <td style={{padding:"7px 10px",textAlign:"center"}}>
+                          <button onClick={()=>rcEliminarLinea(l.id)} title="Quitar del reporte" style={{background:"none",border:"none",color:G.rojo,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{borderTop:`2px solid ${G.borde}`,background:G.sup2}}>
+                      <td colSpan={7} style={{padding:"8px 10px",textAlign:"right",fontWeight:600,fontSize:12}}>TOTAL</td>
+                      <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontFamily:"DM Mono,monospace",color:G.verde,fontSize:14}}>{fmt(rcResultado.totalCompra)}</td>
+                      <td colSpan={3}></td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
             </div>
             <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
               <Btn variant="ghost" onClick={()=>setRcResultado(null)}>← Volver a configurar</Btn>
