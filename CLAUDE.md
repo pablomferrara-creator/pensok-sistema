@@ -325,7 +325,7 @@ Pablo pidió una segunda forma de generar el reporte, más simple que la "Inteli
   - Si `pedirPilar+pedirCaamanio<=0` el producto no entra al reporte (no le hace falta a ninguno de los dos).
   - Urgencia: rojo si algún local está en 0 y le hace falta; amarillo si alguno está en o por debajo de su mínimo; verde en el resto.
 - **Tabla de resultados con columnas separadas por local**: Stock Pilar / Pedir Pilar (editable) / Stock Caamaño / Pedir Caamaño (editable) / Total (suma, no editable directo) / Costo / Subtotal / Urg. `rcCambiarCantidadSplit(id,campo,valor)` edita un lado puntual y recalcula el total y el subtotal de esa línea.
-- El PDF (mismo `exportarRecompraPDF`, ahora bifurcado por `rcResultado.modo`) usa las mismas columnas por local, en A4 horizontal.
+- El PDF (mismo `exportarRecompraPDF`, ahora bifurcado por `rcResultado.modo`) es más resumido que la tabla en pantalla: **sin las columnas de Stock por local** (esas se ven/editan en pantalla, no van al PDF que se manda a cotizar) — queda Código, Producto, Proveedor, Pedir {local}, Pedir {otro local}, Total, Costo, Subtotal, Urg.
 - Reutiliza toda la infraestructura ya armada para el modo inteligente: ordenar por columna (`rcToggleSort`/`RcSortIcon`), eliminar una línea (`rcEliminarLinea`), recalcular totales/proveedores (`recalcularResultado`) — todo agnóstico a la forma exacta de cada línea, solo necesita `.id`/`.subtotal`/`.proveedor`.
 
 ## Reporte de compra: suma también la demanda de Caamaño (2026-08-27)

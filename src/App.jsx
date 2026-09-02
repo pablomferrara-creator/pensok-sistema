@@ -6244,16 +6244,14 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     const esStockMinimo = r.modo==="stockMinimo";
     const cols = esStockMinimo ? [
       {k:'codigo',    label:'Código',    w:20, align:'left'},
-      {k:'nombre',    label:'Producto',  w:59, align:'left'},
-      {k:'proveedor', label:'Proveedor', w:27, align:'left'},
-      {k:'stockPilar',label:`Stock ${LOCALES[localKey].nombre.replace('Pensok ','')}`, w:24, align:'center'},
-      {k:'pedirPilar',label:'Pedir',     w:16, align:'center'},
-      {k:'stockCaamanio',label:`Stock ${LOCALES[otroLocalKey].nombre.replace('Pensok ','')}`, w:24, align:'center'},
-      {k:'pedirCaamanio',label:'Pedir',  w:16, align:'center'},
-      {k:'cantAPedir',label:'Total',     w:18, align:'center'},
-      {k:'costo',     label:'Costo',     w:24, align:'right'},
-      {k:'subtotal',  label:'Subtotal',  w:28, align:'right'},
-      {k:'urgencia',  label:'Urg.',      w:14, align:'center'},
+      {k:'nombre',    label:'Producto',  w:78, align:'left'},
+      {k:'proveedor', label:'Proveedor', w:32, align:'left'},
+      {k:'pedirPilar',label:`Pedir ${LOCALES[localKey].nombre.replace('Pensok ','')}`, w:18, align:'center'},
+      {k:'pedirCaamanio',label:`Pedir ${LOCALES[otroLocalKey].nombre.replace('Pensok ','')}`, w:18, align:'center'},
+      {k:'cantAPedir',label:'Total',     w:20, align:'center'},
+      {k:'costo',     label:'Costo',     w:26, align:'right'},
+      {k:'subtotal',  label:'Subtotal',  w:30, align:'right'},
+      {k:'urgencia',  label:'Urg.',      w:16, align:'center'},
     ] : [
       {k:'codigo',    label:'Código',    w:22, align:'left'},
       {k:'nombre',    label:'Producto',  w:88, align:'left'},
@@ -6343,9 +6341,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
           case 'codigo': val=l.codigo; break;
           case 'nombre': val=l.nombre+(l.incluyeEnvasado?' (+envasado)':''); break;
           case 'proveedor': val=l.proveedor; break;
-          case 'stockPilar': val=fmtNum(l.stockPilar); break;
           case 'pedirPilar': val=String(l.pedirPilar); break;
-          case 'stockCaamanio': val=l.tieneOtro?fmtNum(l.stockCaamanio):'—'; break;
           case 'pedirCaamanio': val=String(l.pedirCaamanio); break;
           case 'cantAPedir': val=String(l.cantAPedir); break;
           case 'costo': val=fmt(l.costo); break;
