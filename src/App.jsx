@@ -5910,10 +5910,13 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   const [rcMesesHistorial, setRcMesesHistorial] = useState("3");
   const [rcMesesProyeccion,setRcMesesProyeccion]= useState("1");
   const [rcResultado,      setRcResultado]      = useState(null);
+  // Caamaño se abastece por Traspasos desde acá (confirmado con Pablo), así que sus ventas
+  // cuentan como demanda real a la hora de decidir cuánto comprar -- por defecto incluidas.
+  const [rcIncluirOtro,    setRcIncluirOtro]    = useState(true);
   const [rcGenerando,      setRcGenerando]      = useState(false);
   const [rcPdfLoading,     setRcPdfLoading]     = useState(false);
 
-  function calcularRecompra(){
+  async function calcularRecompra(){
     setRcGenerando(true);
     const presupuesto  = parseFloat(rcPresupuesto)||0;
     const mesesHist    = parseInt(rcMesesHistorial)||3;
@@ -5933,9 +5936,27 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     });
     const todosMeses = [...mesesActual,...mesesAnterior];
 
+    // Ventas del otro local (Caamaño se abastece por Traspasos desde acá, así que su demanda
+    // real también hay que cubrirla comprando desde este local -- ver checkbox del formulario).
+    // No es contiguo el rango de meses (últimos N + mismos N del año pasado), así que se trae
+    // un rango amplio por fecha y se filtra preciso igual que con las ventas propias.
+    let ventasOtro = [];
+    if(rcIncluirOtro){
+      try{
+        const mesesOrd = [...todosMeses].sort();
+        const desde = mesesOrd[0]+"-01";
+        const [uy,um] = mesesOrd[mesesOrd.length-1].split("-").map(Number);
+        const hasta = new Date(uy,um,1).toISOString().slice(0,10); // 1er día del mes siguiente al último considerado (límite exclusivo)
+        const {data} = await supabaseOtro.from("ventas")
+          .select("fecha, items:venta_items(nombre,cantidad,precio,costo)")
+          .gte("fecha",desde).lt("fecha",hasta).limit(20000);
+        ventasOtro = data||[];
+      }catch(e){ console.warn(`No se pudieron cargar las ventas de ${LOCALES[otroLocalKey].nombre} para el reporte de compra:`,e); }
+    }
+
     // Ventas por producto en esos meses (agrupado por nombre, ya que venta_items no tiene producto_id)
     const ventasPorNombre = {};
-    ventas.forEach(v=>{
+    [...ventas,...ventasOtro].forEach(v=>{
       const mes = v.fecha?.slice(0,7);
       if(!todosMeses.includes(mes)) return;
       (v.items||[]).forEach(it=>{
@@ -6061,6 +6082,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       mesesAnalizados: mesesActual,
       porProveedor,
       generadoEn: new Date().toLocaleString("es-AR"),
+      incluyoOtro: rcIncluirOtro,
     });
     setRcGenerando(false);
   }
@@ -6161,7 +6183,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       doc.setFont('helvetica','bold'); doc.setFontSize(13);
       doc.text('Reporte de Compra Inteligente — Pensok', ML, 9);
       doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(...gris);
-      doc.text(`Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?'es':''}`, ML, 14.5);
+      doc.text(`Generado el ${r.generadoEn} · Historial: ${r.mesesHistorial} meses + mismo período año anterior · Proyección: ${r.mesesProyeccion} mes${r.mesesProyeccion>1?'es':''}${r.incluyoOtro?` · Incluye demanda de ${LOCALES[otroLocalKey].nombre}`:''}`, ML, 14.5);
     }
     function dibujarPie(pagina,totalPaginas){
       doc.setFillColor(...celeste);
@@ -6642,6 +6664,10 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
             <Fi label="Proveedor (opcional)" value={rcProveedor} onChange={setRcProveedor} options={["Todos",...provsUnicos.filter(p=>p!=="Todos")]}/>
             <Fi label="Presupuesto disponible (vacío = sin límite)" value={rcPresupuesto} onChange={setRcPresupuesto} type="number" placeholder="Ej: 500000"/>
             {rcPresupuesto&&<div style={{fontSize:11,color:G.textoSec}}>Con presupuesto el sistema priorizará los productos más rentables y urgentes.</div>}
+            <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,cursor:"pointer"}}>
+              <input type="checkbox" checked={rcIncluirOtro} onChange={e=>setRcIncluirOtro(e.target.checked)}/>
+              Incluir también las ventas de {LOCALES[otroLocalKey].nombre} en la demanda
+            </label>
             <Btn full onClick={calcularRecompra} disabled={rcGenerando}>
               {rcGenerando?"Calculando...":"Generar reporte"}
             </Btn>
@@ -6661,6 +6687,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
                 </div>
               ))}
             </div>
+            <div style={{fontSize:11,color:G.textoSec}}>{rcResultado.incluyoOtro?`Incluye la demanda de ${LOCALES[otroLocalKey].nombre}`:`No incluye ${LOCALES[otroLocalKey].nombre}`}</div>
             {Object.keys(rcResultado.porProveedor).length>1&&(
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                 {Object.entries(rcResultado.porProveedor).sort((a,b)=>b[1].subtotal-a[1].subtotal).map(([prov,d])=>(

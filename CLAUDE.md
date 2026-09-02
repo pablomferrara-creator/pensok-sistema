@@ -314,6 +314,15 @@ Pablo pasó un PDF (`LP_MQ_120826_MAK6150.pdf`, lista vigente de Makinthal Quím
 - Cambio de costo promedio en los 28 "de lista": **+13,5%**, con dispersión real (-16,4% a +60,8% según producto) — se avisó a Pablo antes de aplicar por la magnitud del cambio, confirmó proceder.
 - Aplicado a 29/29 en Pilar y 29/29 en Caamaño. Corrido directo por psql, mismo criterio que los casos anteriores (no es cambio de esquema); reversa fila por fila en el scratchpad de la sesión.
 
+## Reporte de compra: suma también la demanda de Caamaño (2026-08-27)
+
+Pablo confirmó que **Caamaño se abastece 100% por Traspasos desde Pilar** (no compra directo a proveedores) — así que la demanda real que Pilar tiene que cubrir comprando es la de sus propias ventas **más** lo que después le traspasa a Caamaño. `calcularRecompra` (`ModuloProductos`) ahora suma las ventas de Caamaño a la misma bolsa `ventasPorNombre` que ya usa para las propias.
+
+- **Checkbox "Incluir también las ventas de {otro local} en la demanda"**, tildado por defecto (`rcIncluirOtro`). Usa `supabaseOtro` (el cliente cruzado de solo lectura que ya existía para Traspasos/deuda) — funciona simétrico en cualquiera de las dos direcciones, aunque el caso real confirmado es Pilar incluyendo Caamaño.
+- `calcularRecompra` pasó a ser **async**: si el checkbox está tildado, trae `ventas` de la otra base con `select("fecha, items:venta_items(...)")` (el alias `items:` deja la forma igual a la de las ventas propias, que ya vienen enriquecidas así) filtrando por un rango de fechas amplio (los meses de historial no son contiguos: últimos N meses + los mismos N del año pasado), y filtra preciso por mes igual que con las ventas propias antes de sumarlas.
+- **No se mezcla nada de stock/costo/envasado entre bases** — solo las CANTIDADES vendidas por nombre de producto entran a la bolsa compartida; el resto del cálculo (stock actual, costo, granel_id/consumo_granel del envasado) sigue usando exclusivamente los datos de Pilar, que es donde se decide cuánto comprar.
+- El resultado en pantalla y el PDF aclaran si la demanda de {otro local} está incluida o no (`incluyoOtro`).
+
 ## Reporte de compra: exporta PDF real, no .html (2026-08-27)
 
 `exportarRecompraPDF` armaba un HTML y lo descargaba con extensión `.html` (útil para verlo en el navegador, pero Pablo lo necesita como PDF de verdad para mandar a cotizar). Reescrito con jsPDF, mismo patrón que el resto de los PDF de Productos (carga dinámica de `jspdf.umd.min.js` desde cdnjs, header/pie celeste `[209,231,251]` para ahorrar tinta al imprimir):
