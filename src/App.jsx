@@ -2879,7 +2879,7 @@ function ModuloValorStock({historial=[]}){
 // ============================================================
 // PDF de presupuesto, compartido entre "Nueva Venta" (al generarlo por primera vez) y
 // "Presupuestos" (al reimprimir uno ya editado, mostrando su version si es >1).
-async function generarPDFPresupuesto({nroPresupuesto,version=1,clienteNombre="CONSUMIDOR FINAL",vendedor,tipoCliente="minorista",items}){
+async function generarPDFPresupuesto({nroPresupuesto,version=1,clienteNombre="CONSUMIDOR FINAL",vendedor,tipoCliente="minorista",items,descuento=0}){
     if(!window.jspdf){
       await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s);});
     }
@@ -2998,21 +2998,26 @@ async function generarPDFPresupuesto({nroPresupuesto,version=1,clienteNombre="CO
     doc.text(fmtP(subtotalBruto),W-16,y,{align:'right'});
     y+=6;
 
-    // Descuento — siempre $0 en el presupuesto
+    // Total real: mismo cálculo que al cerrar la venta (calcTotalItems) -- aplica el % de
+    // descuento y redondea al $100 hacia arriba, para que el presupuesto coincida con lo que
+    // termina cobrándose si el cliente lo acepta tal cual. Antes acá siempre se mostraba
+    // Descuento $0 y Total = subtotal bruto sin redondear, lo que daba un monto distinto al de
+    // la venta real cuando había descuento y/o el redondeo cambiaba el número.
+    const totalReal = calcTotalItems(items, descuento);
     doc.setTextColor(...gris);
-    doc.text('Descuento',W-90,y);
+    doc.text(descuento>0?`Descuento (${descuento}%)`:'Descuento',W-90,y);
     doc.setTextColor(...negro);
-    doc.text(fmtP(0),W-16,y,{align:'right'});
+    doc.text(descuento>0?`-${fmtP(Math.round(subtotalBruto*descuento/100))}`:fmtP(0),W-16,y,{align:'right'});
     y+=6;
 
-    // Total — sin descuento en el presupuesto
+    // Total
     doc.setFillColor(...azul);
     doc.rect(W-90,y-2,76,12,'F');
     doc.setFont('helvetica','bold');
     doc.setFontSize(13);
     doc.setTextColor(...blanco);
     doc.text('TOTAL',W-87,y+6);
-    doc.text(fmtP(subtotalBruto),W-16,y+6,{align:'right'});
+    doc.text(fmtP(totalReal),W-16,y+6,{align:'right'});
     y+=18;
 
     // Notas finales
@@ -3173,7 +3178,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
       vendedor, tipoLista:tipoCliente, modalidad, descuento:parseFloat(descuento)||0, items
     });
     if(!nroPresupuesto) toast.err("El presupuesto se generó pero no se pudo guardar en el sistema");
-    await generarPDFPresupuesto({nroPresupuesto, version:1, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL", vendedor, tipoCliente, items});
+    await generarPDFPresupuesto({nroPresupuesto, version:1, clienteNombre:cliente?.nombre||"CONSUMIDOR FINAL", vendedor, tipoCliente, items, descuento:parseFloat(descuento)||0});
     setGenPres(false);
   }
 
@@ -3553,7 +3558,7 @@ function ModuloPresupuestos({presupuestos=[],productos=[],onAprobar,onCancelar,o
     const items=(p.presupuesto_items||[]).map(it=>({nombre:it.nombre,cantidad:it.cantidad,precio:it.precio}));
     await generarPDFPresupuesto({
       nroPresupuesto:p.nro_presupuesto, version:p.version||1, clienteNombre:p.cliente_nombre,
-      vendedor:p.vendedor, tipoCliente:p.tipo_lista, items
+      vendedor:p.vendedor, tipoCliente:p.tipo_lista, items, descuento:p.descuento||0
     });
     setDescargando(false);
   }

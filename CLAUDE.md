@@ -384,6 +384,14 @@ Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en 
 - La tabla del modal y el HTML/PDF exportado marcan con un badge **"♻ +envasado"** al lado del nombre cuando una línea incluye demanda indirecta, para que quede claro por qué se está sugiriendo pedir eso.
 - No toca nada de Abastecimiento/Control de Stock — es solo el cálculo de proyección de compra.
 
+## Fix: el PDF de Presupuesto no coincidía con el total real de la venta (2026-08-27)
+
+Pablo notó que el total impreso al "Extraer Presupuesto" quedaba distinto al de la venta real cuando la confirmaba. Causa: `generarPDFPresupuesto` **no recibía el descuento como parámetro** y hardcodeaba "Descuento $0" + "Total = subtotal bruto sin redondear" (comentario explícito en el código: "siempre $0 en el presupuesto" / "sin descuento en el presupuesto") — mientras que el total real de una venta/presupuesto siempre pasa por `calcTotalItems(items,desc)` ([App.jsx:99](src/App.jsx:99)), que sí aplica el % de descuento y redondea hacia arriba al múltiplo de $100 (`Math.ceil(bruto*(1-desc/100)/100)*100`). El PDF no coincidía ni con la venta real ni con el propio registro de presupuesto ya guardado en la base (que sí usa `calcTotalItems`).
+
+- `generarPDFPresupuesto` ahora recibe `descuento` y usa `calcTotalItems(items,descuento)` para el TOTAL impreso — mismo número que va a cobrarse si el cliente lo acepta tal cual.
+- La línea "Descuento" del PDF muestra el % real (si hay) en vez de $0 fijo.
+- Los dos call sites actualizados: `generarPresupuesto()` en `ModuloVenta` (pasa `descuento` del estado del formulario) y `descargarPDFActualizado()` en `ModuloPresupuestos` (pasa `p.descuento` del registro guardado, para re-descargar un presupuesto ya emitido).
+
 ## Fix general: los filtros de cada módulo ya no se resetean al guardar/editar/dar de baja algo (2026-08-27)
 
 Pablo reportó el caso puntual de Productos: filtraba por proveedor, editaba/desactivaba un producto, y al guardar el filtro desaparecía — tenía que volver a filtrar para seguir con el siguiente. La causa era **general, no específica de Productos**: el área de contenido principal (`App`, cerca del render de todos los `Modulo*`) mostraba el spinner de pantalla completa "Cargando datos..." con la condición `data.loading&&modulo!=="venta"` — y **`data.loading` se pone en `true` un instante en CADA `cargar()`**, que se llama al final de prácticamente cualquier acción que guarda algo (`guardarProducto`, `toggleProveedor`, editar/eliminar cualquier cosa, etc.), no solo en la carga inicial de la página. Cada vez que eso pasaba, el módulo activo se **desmontaba y volvía a montar por completo**, perdiendo cualquier filtro/búsqueda que viviera como estado local de ese módulo (`useState` dentro del componente).
