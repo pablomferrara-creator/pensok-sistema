@@ -3822,24 +3822,11 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
   }
   function actualizarItem(idx,campo,valor){setEvItems(prev=>prev.map((it,i)=>i===idx?{...it,[campo]:valor}:it));}
   function eliminarItem(idx){setEvItems(prev=>prev.filter((_,i)=>i!==idx));}
-  function agregarItemDesdeProducto(prod){
-    setEvItems(prev=>[...prev,{nombre:prod.nombre,cantidad:"1",precio:String(prod.precio_min),costo:prod.costo||0,producto_id:prod.id}]);
-    setEvBusqueda("");
-  }
-  async function guardarVenta(){
-    if(!editandoV)return; setEvLoading(true);
-    const itemsNum=evItems.map(i=>({...i,cantidad:parseFloat(i.cantidad)||0,precio:parseFloat(i.precio)||0}));
-    const bruto=itemsNum.reduce((s,i)=>s+i.precio*i.cantidad,0);
-    const desc=editandoV.descuento||0;
-    const total=redondear100(bruto*(1-desc/100));
-    const costos=itemsNum.reduce((s,i)=>s+(i.costo||0)*i.cantidad,0);
-    const comision=parseFloat(evComision)||0;
-    const ganancia=total-costos-comision;
-    await onEditar(editandoV.id,{cliente_nombre:evCliente,vendedor:evVendedor,metodo_pago:evMetodo,cobrado:evCobrado,entregado:evEntregado,comision_plataforma:comision,total,ganancia});
-    await supabase.from("venta_items").delete().eq("venta_id",editandoV.id);
-    if(itemsNum.length>0) await supabase.from("venta_items").insert(itemsNum.map(i=>({venta_id:editandoV.id,producto_id:i.producto_id||null,nombre:i.nombre,cantidad:i.cantidad,precio:i.precio,costo:i.costo||0})));
-    setEvLoading(false); setEditandoV(null);
-  }
+  // (Antes había acá una segunda versión de agregarItemDesdeProducto/guardarVenta, sin uso real
+  // -- una función declarada dos veces en el mismo scope queda pisada por la última, así que
+  // esa primera nunca se llamaba desde ningún lado. Se sacó por completo el 2026-09-08: no
+  // tocaba stock al editar items (ni siquiera con el clamp de abajo), y su existencia como
+  // código muerto casi hace pasar por alto el bug real, que estaba en la versión que sí corre.)
   function abrirQuickEdit(v){
     setQuickEditV(v); setQeCobrado(v.cobrado??true); setQeEntregado(v.entregado??true); setQeComision(String(v.comision_plataforma||0));
   }
@@ -4127,7 +4114,11 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
       if(diff===0) continue;
       const prod = productos.find(p=>p.nombre===nombre);
       if(!prod) continue;
-      const nuevoStock = Math.max(0,(prod.stock||0)-diff);
+      // Sin Math.max(0,...) a propósito: registrarVenta tampoco clampea (permite stock
+      // negativo, es el criterio de "vendido antes de abastecer" que ya usa toda la app --
+      // ver estadoStock y "Pendiente de abastecer"). Clampear acá perdía el ajuste real cuando
+      // el producto ya estaba en/cerca de 0, sin dejar rastro de que faltó descontar.
+      const nuevoStock = (prod.stock||0)-diff;
       await supabase.from("productos").update({stock:nuevoStock}).eq("id",prod.id);
     }
 
