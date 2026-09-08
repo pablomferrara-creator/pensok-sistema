@@ -384,6 +384,17 @@ Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en 
 - La tabla del modal y el HTML/PDF exportado marcan con un badge **"♻ +envasado"** al lado del nombre cuando una línea incluye demanda indirecta, para que quede claro por qué se está sugiriendo pedir eso.
 - No toca nada de Abastecimiento/Control de Stock — es solo el cálculo de proyección de compra.
 
+## Fix: buscador de productos cortaba a 8 resultados sin ordenar por relevancia (2026-08-27)
+
+Pablo tenía cargadas 4 "Multivalvula..." en Productos, pero al editar una venta vieja y buscar "multivalvula" en el buscador de agregar producto, dos de ellas (las variantes "marrón", 13591B/13591C) no aparecían como opción para seleccionar.
+
+- Causa: el buscador de esos modales corta a los **primeros 8 matches sin ordenar por relevancia** — como "multivalvula" también aparece dentro de nombres de repuestos sueltos (arandelas, manijas, etc. "P/MULTIVALVULA"), esos ocupaban los primeros lugares alfabéticos y las multiválvulas de verdad quedaban en la posición 9/10, fuera del corte. Confirmado con una consulta directa: hay **14 productos activos** que matchean "multivalvula" en Pilar.
+- Mismo patrón (`.filter(...).slice(0,8)`) copiado en **tres lugares distintos**, los tres con el mismo problema — se subió el corte a 30 en los tres:
+  - "Editar venta" (`ModuloIngresos`, el caso reportado).
+  - "Editar presupuesto" (`ModuloPresupuestos`).
+  - Agregar producto a un Traspaso (`ModuloTraspasos`).
+- No se tocó el orden de los resultados (sigue siendo el orden de `productos`, por nombre) — solo el corte. Si en el futuro un catálogo tiene más de 30 matches para un término común, valdría la pena además ordenar por relevancia (coincidencia al principio del nombre primero), pero no era necesario para este caso.
+
 ## Fix: el PDF de Presupuesto no coincidía con el total real de la venta (2026-08-27)
 
 Pablo notó que el total impreso al "Extraer Presupuesto" quedaba distinto al de la venta real cuando la confirmaba. Causa: `generarPDFPresupuesto` **no recibía el descuento como parámetro** y hardcodeaba "Descuento $0" + "Total = subtotal bruto sin redondear" (comentario explícito en el código: "siempre $0 en el presupuesto" / "sin descuento en el presupuesto") — mientras que el total real de una venta/presupuesto siempre pasa por `calcTotalItems(items,desc)` ([App.jsx:99](src/App.jsx:99)), que sí aplica el % de descuento y redondea hacia arriba al múltiplo de $100 (`Math.ceil(bruto*(1-desc/100)/100)*100`). El PDF no coincidía ni con la venta real ni con el propio registro de presupuesto ya guardado en la base (que sí usa `calcTotalItems`).
