@@ -384,6 +384,15 @@ Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en 
 - La tabla del modal y el HTML/PDF exportado marcan con un badge **"♻ +envasado"** al lado del nombre cuando una línea incluye demanda indirecta, para que quede claro por qué se está sugiriendo pedir eso.
 - No toca nada de Abastecimiento/Control de Stock — es solo el cálculo de proyección de compra.
 
+## Control de Stock: tabla del detalle ordenable, para priorizar las mayores diferencias (2026-09-08)
+
+A pedido de Pablo, para poder revisar los productos con más diferencia antes de aplicar un ajuste (en vez de leer la lista entera de arriba a abajo).
+
+- Encabezados de la tabla del modal de detalle (`ModuloControlStock`) ahora son clickeables (`csSortCol`/`csSortDir`/`csToggleSort`/`CsSortIcon`, mismo patrón visual `⇅`/`↑`/`↓` que las demás tablas ordenables) — Producto, Contado, Sistema (al contar), Diferencia, Sistema (ahora). Solo en modo lectura, no mientras se está corrigiendo un conteo (`editandoConteo`).
+- **Nueva columna "Diferencia"**: `stock_contado - stockAhora` (lo contado contra el stock de sistema **más reciente**, no el que había al contar) — resume en un solo número tanto el desvío del conteo en sí como cualquier venta/compra que haya pasado después. Es el número más útil para decidir qué revisar antes de aplicar. Verde si sobra, rojo si falta, gris si da 0.
+- Ordenar por "Diferencia" u otras columnas numéricas usa el valor absoluto para el orden descendente por defecto (mayor diferencia primero, sin importar el signo); por "Producto" ordena A-Z.
+- Modal más ancho en modo lectura (800px en vez de 660px) para que entren las 5 columnas; en modo edición sigue en 660px con las 3 columnas de siempre (no hace falta ordenar ahí, se está corrigiendo item por item).
+
 ## Fix: "Editar venta" podía perder el ajuste de stock si clampeaba a 0 (2026-09-08)
 
 Pablo sospechó que una venta editada en Caamaño no había descontado stock de una multiválvula (terminó viendo 2 en vez de 1 tras un abastecimiento). Investigado a fondo:

@@ -8990,6 +8990,18 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
   const [valoresEdicion,setValoresEdicion] = useState({}); // item_id -> string, mientras se corrige un conteo
   const [guardandoEdicion,setGuardandoEdicion] = useState(false);
   const [generandoPlanilla,setGenerandoPlanilla] = useState(false);
+  // Orden de la tabla de items dentro del modal de detalle de un conteo -- para poder revisar
+  // primero los productos con mayor diferencia antes de aplicar el ajuste.
+  const [csSortCol,setCsSortCol] = useState(null); // "nombre"|"contado"|"sistema"|"diferencia"|"ahora"|"cambio"
+  const [csSortDir,setCsSortDir] = useState("desc");
+  function csToggleSort(col){
+    if(csSortCol===col) setCsSortDir(d=>d==="asc"?"desc":"asc");
+    else { setCsSortCol(col); setCsSortDir(col==="nombre"?"asc":"desc"); } // nombre arranca A-Z, el resto de mayor a menor
+  }
+  function CsSortIcon({col}){
+    if(csSortCol!==col) return <span style={{color:G.borde,marginLeft:3}}>⇅</span>;
+    return <span style={{color:G.verde,marginLeft:3}}>{csSortDir==="asc"?"↑":"↓"}</span>;
+  }
 
   // Precargar el responsable con el nombre del usuario logueado (si matchea), pero queda editable.
   useEffect(()=>{ if(!respSel && miNombre) setRespSel(miNombre); },[miNombre]);
@@ -9305,13 +9317,39 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
 
       {/* Modal detalle / aplicar ajuste */}
       {verConteo&&(()=>{
-        const items = verConteo.conteos_stock_items||[];
-        const hayCambios = !verConteo.aplicado&&items.some(it=>{
+        const itemsBase = verConteo.conteos_stock_items||[];
+        const hayCambios = !verConteo.aplicado&&itemsBase.some(it=>{
           const prodAhora=productos.find(p=>p.id===it.producto_id);
           return prodAhora&&prodAhora.stock!==it.stock_sistema;
         });
+        // Enriquecido con lo que hace falta para poder ordenar por mayor diferencia -- "diferencia"
+        // compara lo contado contra el stock de sistema MÁS RECIENTE (no el de al contar), así
+        // resume en un solo número tanto el desvío del conteo como lo que haya cambiado después.
+        const itemsEnriquecidos = itemsBase.map(it=>{
+          const prodAhora = productos.find(p=>p.id===it.producto_id);
+          const stockAhora = prodAhora?prodAhora.stock:it.stock_sistema;
+          return {
+            ...it, stockAhora,
+            cambioDesdeConteo: stockAhora!==it.stock_sistema,
+            diferenciaConteo: it.stock_contado-it.stock_sistema,
+            diferencia: it.stock_contado-stockAhora,
+          };
+        });
+        const items = csSortCol ? [...itemsEnriquecidos].sort((a,b)=>{
+          let va,vb;
+          switch(csSortCol){
+            case "nombre": va=a.nombre.toLowerCase(); vb=b.nombre.toLowerCase(); break;
+            case "contado": va=a.stock_contado; vb=b.stock_contado; break;
+            case "sistema": va=a.stock_sistema; vb=b.stock_sistema; break;
+            case "ahora": va=a.stockAhora; vb=b.stockAhora; break;
+            case "diferencia": va=Math.abs(a.diferencia); vb=Math.abs(b.diferencia); break;
+            default: va=0; vb=0;
+          }
+          const cmp = typeof va==="string" ? va.localeCompare(vb) : va-vb;
+          return csSortDir==="asc"?cmp:-cmp;
+        }) : itemsEnriquecidos;
         return(
-          <Modal title={`Conteo de ${verConteo.categoria} — ${verConteo.fecha}`} onClose={()=>{setVerConteo(null);setEditandoConteo(false);}} maxWidth={660}
+          <Modal title={`Conteo de ${verConteo.categoria} — ${verConteo.fecha}`} onClose={()=>{setVerConteo(null);setEditandoConteo(false);}} maxWidth={editandoConteo?660:800}
             footer={editandoConteo?(<>
               <Btn variant="secondary" onClick={()=>setEditandoConteo(false)}>Cancelar edición</Btn>
               <Btn variant="primary" disabled={guardandoEdicion} onClick={guardarEdicionConteo}>
@@ -9335,27 +9373,31 @@ function ModuloControlStock({productos=[],conteosStock=[],onCrear,onAplicar,onEd
               </div>
             )}
             <div style={{display:"flex",flexDirection:"column",gap:1,maxHeight:400,overflowY:"auto"}}>
-              <div style={{display:"grid",gridTemplateColumns:editandoConteo?"1fr 90px 90px":"1fr 90px 90px 90px",gap:8,padding:"6px 8px",fontSize:10,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>
-                <span>Producto</span><span style={{textAlign:"right"}}>Contado</span><span style={{textAlign:"right"}}>Sistema (al contar)</span>{!editandoConteo&&<span style={{textAlign:"right"}}>Sistema (ahora)</span>}
+              <div style={{display:"grid",gridTemplateColumns:editandoConteo?"1fr 90px 90px":"1fr 80px 100px 90px 100px",gap:8,padding:"6px 8px",fontSize:10,color:G.textoSec,textTransform:"uppercase",letterSpacing:0.5}}>
+                {editandoConteo?(<>
+                  <span>Producto</span><span style={{textAlign:"right"}}>Contado</span><span style={{textAlign:"right"}}>Sistema (al contar)</span>
+                </>):[
+                  {l:"Producto",col:"nombre",al:"left"},{l:"Contado",col:"contado",al:"right"},
+                  {l:"Sistema (al contar)",col:"sistema",al:"right"},{l:"Diferencia",col:"diferencia",al:"right"},
+                  {l:"Sistema (ahora)",col:"ahora",al:"right"},
+                ].map(h=>(
+                  <span key={h.col} onClick={()=>csToggleSort(h.col)} style={{textAlign:h.al,cursor:"pointer",userSelect:"none",whiteSpace:"nowrap"}}>{h.l}<CsSortIcon col={h.col}/></span>
+                ))}
               </div>
-              {items.map(it=>{
-                const prodAhora = productos.find(p=>p.id===it.producto_id);
-                const stockAhora = prodAhora?prodAhora.stock:it.stock_sistema;
-                const cambioDesdeConteo = stockAhora!==it.stock_sistema;
-                return(
-                  <div key={it.id} style={{display:"grid",gridTemplateColumns:editandoConteo?"1fr 90px 90px":"1fr 90px 90px 90px",gap:8,padding:"7px 8px",fontSize:12,background:G.sup2,borderRadius:6,alignItems:"center"}}>
-                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</span>
-                    {editandoConteo?(
-                      <input type="number" step="0.01" value={valoresEdicion[it.id]??""} onChange={e=>setValoresEdicion(v=>({...v,[it.id]:e.target.value}))}
-                        style={{width:"100%",background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 8px",color:G.texto,fontSize:12,outline:"none",textAlign:"right"}}/>
-                    ):(
-                      <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:it.stock_contado!==it.stock_sistema?G.amarillo:G.texto}}>{fmtNum(it.stock_contado)}</span>
-                    )}
-                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:G.textoSec}}>{fmtNum(it.stock_sistema)}</span>
-                    {!editandoConteo&&<span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:cambioDesdeConteo?G.rojo:G.textoSec}}>{fmtNum(stockAhora)}{cambioDesdeConteo?" ⚠":""}</span>}
-                  </div>
-                );
-              })}
+              {items.map(it=>(
+                <div key={it.id} style={{display:"grid",gridTemplateColumns:editandoConteo?"1fr 90px 90px":"1fr 80px 100px 90px 100px",gap:8,padding:"7px 8px",fontSize:12,background:G.sup2,borderRadius:6,alignItems:"center"}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</span>
+                  {editandoConteo?(
+                    <input type="number" step="0.01" value={valoresEdicion[it.id]??""} onChange={e=>setValoresEdicion(v=>({...v,[it.id]:e.target.value}))}
+                      style={{width:"100%",background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 8px",color:G.texto,fontSize:12,outline:"none",textAlign:"right"}}/>
+                  ):(
+                    <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:it.stock_contado!==it.stock_sistema?G.amarillo:G.texto}}>{fmtNum(it.stock_contado)}</span>
+                  )}
+                  <span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:G.textoSec}}>{fmtNum(it.stock_sistema)}</span>
+                  {!editandoConteo&&<span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",fontWeight:it.diferencia!==0?700:400,color:it.diferencia===0?G.textoSec:it.diferencia>0?G.verde:G.rojo}}>{it.diferencia>0?"+":""}{fmtNum(it.diferencia)}</span>}
+                  {!editandoConteo&&<span style={{textAlign:"right",fontFamily:"'DM Mono',monospace",color:it.cambioDesdeConteo?G.rojo:G.textoSec}}>{fmtNum(it.stockAhora)}{it.cambioDesdeConteo?" ⚠":""}</span>}
+                </div>
+              ))}
             </div>
             {!editandoConteo&&hayCambios&&(
               <div style={{marginTop:12,padding:"10px 12px",background:"#FF4D6A15",border:"1px solid #FF4D6A33",borderRadius:8,fontSize:12,color:G.rojo}}>
