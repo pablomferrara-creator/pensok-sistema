@@ -384,6 +384,13 @@ Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en 
 - La tabla del modal y el HTML/PDF exportado marcan con un badge **"♻ +envasado"** al lado del nombre cuando una línea incluye demanda indirecta, para que quede claro por qué se está sugiriendo pedir eso.
 - No toca nada de Abastecimiento/Control de Stock — es solo el cálculo de proyección de compra.
 
+## Fix: "Comisiones pendientes" (Ingresos) filtraba también ventas sin cobrar (2026-09-09)
+
+Pablo notó que el botón "⚠ Comisiones pendientes" (filtro rápido en Ingresos → Ventas) traía también ventas marcadas "Sin cobrar" — que obviamente no pueden tener una comisión pendiente de cargar, porque todavía no se cobró nada.
+
+- La condición del filtro (`fSinComision`) solo miraba `metodo_pago` con comisión y `comision_plataforma` en 0, sin chequear si la venta ya tenía algún pago registrado. Se agregó `(v.cobrado||(v.monto_cobrado||0)>0)` a la condición — igual criterio que ya usa el resto del módulo para "algún pago ya registrado" (cobro total o parcial).
+- De paso se corrigió el mismo problema en el badge "⚠ Sin comision" que se muestra en cada venta de la lista (aparecía también en ventas sin cobrar).
+
 ## Descuento escalonado por cantidad, por producto (2026-09-09)
 
 Pablo venía resolviendo esto con productos-fantasma: creaba "PASTILLA 200 CAPSULA 5kg", "10kg", etc. solo para tener otro precio según cuánto compraba el cliente — pero esos productos no existen en stock real, así que había que ir a Abastecimiento a mano a "sumar" cada vez que se vendía uno. Ahora es un % configurable en el producto real, que ajusta el precio solo según la cantidad cargada.

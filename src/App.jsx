@@ -4158,7 +4158,10 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
     if(fEstado==="sinCobrar"&&v.cobrado)return false;
     if(fEstado==="sinEntregar"&&v.entregado)return false;
     if(fCliente!=="Todos"&&(v.cliente_nombre||"CONSUMIDOR FINAL")!==fCliente)return false;
-    if(fSinComision&&!(METODOS_CON_COMISION.includes(v.metodo_pago)&&!(v.comision_plataforma>0)))return false;
+    // "Comisiones pendientes" solo debe listar pagos YA registrados (cobrado, o con cobro parcial
+    // registrado via monto_cobrado) -- una venta sin cobrar todavia no tiene ningun pago del que
+    // pueda faltar cargar la comision (pedido de Pablo 2026-09-09, antes tambien listaba "Sin cobrar").
+    if(fSinComision&&!((v.cobrado||(v.monto_cobrado||0)>0)&&METODOS_CON_COMISION.includes(v.metodo_pago)&&!(v.comision_plataforma>0)))return false;
     if(fProducto){const q=fProducto.toLowerCase();if(!(v.items||[]).some(i=>(i.nombre||"").toLowerCase().includes(q)))return false;}
     if(busqIng.trim()){const q=busqIng.toLowerCase();if(!((v.cliente_nombre||"").toLowerCase().includes(q)||(v.vendedor||"").toLowerCase().includes(q)||(v.nro_factura||"").toLowerCase().includes(q)||(v.modalidad||"").toLowerCase().includes(q)||(v.notas_pedido_web||"").toLowerCase().includes(q)))return false;}
     return true;
@@ -4229,7 +4232,7 @@ function ModuloIngresos({ventas,vendedores,productos,clientes,onEditar,onElimina
                   <Badge color={v.cobrado?"verde":"rojo"}>{v.cobrado?"Cobrado":"Sin cobrar"}</Badge>
                   <Badge color={v.entregado?"verde":"amarillo"}>{v.entregado?"Entregado":"Sin entregar"}</Badge>
                   {v.descuento>0&&<Badge color="azul">-{v.descuento}%</Badge>}
-                  {v.metodo_pago!=="Efectivo"&&!(v.comision_plataforma>0)&&<span style={{background:"#FFB80022",color:G.amarillo,border:"1px solid #FFB80055",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>⚠ Sin comision</span>}
+                  {(v.cobrado||(v.monto_cobrado||0)>0)&&v.metodo_pago!=="Efectivo"&&!(v.comision_plataforma>0)&&<span style={{background:"#FFB80022",color:G.amarillo,border:"1px solid #FFB80055",borderRadius:6,padding:"2px 9px",fontSize:11,fontWeight:600}}>⚠ Sin comision</span>}
                   {v.metodo_pago!=="Efectivo"&&v.comision_plataforma>0&&<Badge color="gris">Comision {fmt(v.comision_plataforma)}</Badge>}
                 </div>
                 {(v.items||[]).length>0&&<div style={{marginTop:8,fontSize:11,color:G.textoSec}}>{(v.items||[]).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0"}}><span>{it.nombre} <strong style={{color:G.texto}}>x{it.cantidad}</strong></span><span style={{fontFamily:"DM Mono,monospace"}}>{fmt((it.precio||0)*(it.cantidad||0))}</span></div>)}</div>}
