@@ -90,6 +90,17 @@ const mesAct = () => new Date().toISOString().slice(0,7);
 
 function precioARS(v,m)   { return m==="USD"?v*USD_RATE:v; }
 function getPrecio(p,tipo) { return tipo==="mayorista"?p.precio_may:tipo==="especial"?p.precio_esp:tipo==="costo"?p.costo:p.precio_min; }
+// Descuento escalonado por cantidad (pedido de Pablo 2026-09-09, para productos como "Pastilla
+// 200 capsula" que antes se manejaban con productos-fantasma "x5kg"/"x10kg" solo para tener otro
+// precio). Se carga por producto: descuento_5u/descuento_10u = % de descuento YA TOTAL (no se
+// suman entre sí) sobre el precio base que corresponda (minorista/especial/mayorista) según la
+// cantidad pedida: 1-4u precio de lista, 5-9u descuento_5u%, 10u en adelante descuento_10u%.
+function precioPorCantidad(p,cantidad,precioBase){
+  if(!p) return precioBase;
+  const c=cantidad||0;
+  const pct = c>=10 ? (p.descuento_10u||0) : c>=5 ? (p.descuento_5u||0) : 0;
+  return pct>0 ? Math.round(precioBase*(1-pct/100)) : precioBase;
+}
 // Stock mínimo en 0 = "no quiero que este producto pida reposición nunca" (a propósito, pedido
 // de Pablo el 2026-08-11) -- ni por bajo stock ni por agotado. Stock negativo se sigue marcando
 // igual (es un problema de datos aparte, no un aviso de "andá a comprar más").
@@ -993,7 +1004,7 @@ function useData(toast, usuarioEmail=""){
   async function guardarProducto(datos,id=null){
     if(id){
       // Solo campos válidos de la tabla productos
-      const CAMPOS_PRODUCTO = ["codigo","nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock","stock_min","proveedor","activo","vendidos","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo","granel_id","consumo_granel"];
+      const CAMPOS_PRODUCTO = ["codigo","nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock","stock_min","proveedor","activo","vendidos","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo","granel_id","consumo_granel","descuento_5u","descuento_10u"];
       const datosLimpios = Object.fromEntries(Object.entries(datos).filter(([k])=>CAMPOS_PRODUCTO.includes(k)));
       const{error}=await supabase.from("productos").update(datosLimpios).eq("id",id);
       if(error){toast.err("Error al actualizar producto");return;}
@@ -1006,7 +1017,7 @@ function useData(toast, usuarioEmail=""){
             // granel_id/consumo_granel NO se replican: granel_id es un id numérico interno de
             // esta base, en Caamaño ese mismo número puede apuntar a un producto distinto.
             // Si hace falta el mismo vínculo en Caamaño, se configura ahí directamente.
-            const CAMPOS_REPLICAR = ["nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock_min","proveedor","activo","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo"];
+            const CAMPOS_REPLICAR = ["nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock_min","proveedor","activo","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo","descuento_5u","descuento_10u"];
             const datosReplica = Object.fromEntries(Object.entries(datosLimpios).filter(([k])=>CAMPOS_REPLICAR.includes(k)));
             if(Object.keys(datosReplica).length>0){
               await supabaseCamanio.from("productos").update(datosReplica).eq("codigo",prod.codigo);
@@ -3132,7 +3143,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
     setItems(prev=>prev.map(i=>{
       const prod=productos.find(p=>p.id===i.productoId);
       if(!prod)return i;
-      return {...i,precio:precioARS(getPrecio(prod,tipo),prod.moneda)};
+      return {...i,precio:precioPorCantidad(prod,i.cantidad,precioARS(getPrecio(prod,tipo),prod.moneda))};
     }));
     setClienteBusq("");
   }
@@ -3148,8 +3159,12 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
   function agregarItem(prod){
     setItems(prev=>{
       const ex=prev.find(i=>i.productoId===prod.id);
-      if(ex)return prev.map(i=>i.productoId===prod.id?{...i,cantidad:i.cantidad+1}:i);
-      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:precioARS(getPrecio(prod,tipoCliente),prod.moneda),costo:precioARS(prod.costo,prod.moneda)}];
+      const precioBase=precioARS(getPrecio(prod,tipoCliente),prod.moneda);
+      if(ex){
+        const nuevaCant=ex.cantidad+1;
+        return prev.map(i=>i.productoId===prod.id?{...i,cantidad:nuevaCant,precio:precioPorCantidad(prod,nuevaCant,precioBase)}:i);
+      }
+      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:precioPorCantidad(prod,1,precioBase),costo:precioARS(prod.costo,prod.moneda)}];
     });
     setBusqueda("");
   }
@@ -3403,7 +3418,7 @@ function ModuloVenta({clientes,productos,onRegistrar,onCrearPresupuesto,vendedor
                       {prod?.marca&&<div style={{fontSize:11,color:G.textoSec,marginTop:1}}>{prod.marca}</div>}
                       {sinStock&&<div style={{fontSize:10,color:G.rojo,fontWeight:600,marginTop:2}}>⚠ SIN STOCK — avisar al cliente</div>}
                     </td>
-                    <td style={{padding:"8px 8px"}}><input type="number" value={item.cantidad} onChange={e=>{const n=parseInt(e.target.value)||1;setItems(p=>p.map(i=>i.productoId===item.productoId?{...i,cantidad:Math.max(1,n)}:i));}} min="1" style={{width:52,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 8px",color:G.texto,fontSize:13,textAlign:"center"}}/></td>
+                    <td style={{padding:"8px 8px"}}><input type="number" value={item.cantidad} onChange={e=>{const n=parseInt(e.target.value)||1;const cant=Math.max(1,n);setItems(p=>p.map(i=>{if(i.productoId!==item.productoId)return i;const pr=productos.find(pp=>pp.id===i.productoId);const precioBase=pr?precioARS(getPrecio(pr,tipoCliente),pr.moneda):i.precio;return{...i,cantidad:cant,precio:precioPorCantidad(pr,cant,precioBase)};}));}} min="1" style={{width:52,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 8px",color:G.texto,fontSize:13,textAlign:"center"}}/></td>
                     <td style={{padding:"8px 8px",textAlign:"right"}}><input type="number" value={item.precio} onChange={e=>setItems(p=>p.map(i=>i.productoId===item.productoId?{...i,precio:parseFloat(e.target.value)||0}:i))} style={{width:88,background:G.sup2,border:`1px solid ${G.borde}`,borderRadius:6,padding:"4px 8px",color:G.texto,fontSize:13,textAlign:"right"}}/></td>
                     <td style={{padding:"8px 8px",textAlign:"right",fontFamily:"'DM Mono',monospace",fontWeight:500}}>{fmt(item.precio*item.cantidad)}</td>
                     <td style={{padding:"8px 8px"}}><Btn small variant="danger" onClick={()=>setItems(p=>p.filter(i=>i.productoId!==item.productoId))}>✕</Btn></td>
@@ -3542,8 +3557,11 @@ function ModuloPresupuestos({presupuestos=[],productos=[],onAprobar,onCancelar,o
   function agregarItemEdit(prod){
     setEditItems(prev=>{
       const ex=prev.find(i=>i.productoId===prod.id);
-      if(ex) return prev.map(i=>i.productoId===prod.id?{...i,cantidad:i.cantidad+1}:i);
-      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:prod.precio_min||0,costo:prod.costo||0}];
+      if(ex){
+        const nuevaCant=ex.cantidad+1;
+        return prev.map(i=>i.productoId===prod.id?{...i,cantidad:nuevaCant,precio:precioPorCantidad(prod,nuevaCant,prod.precio_min||0)}:i);
+      }
+      return [...prev,{productoId:prod.id,nombre:prod.nombre,cantidad:1,precio:precioPorCantidad(prod,1,prod.precio_min||0),costo:prod.costo||0}];
     });
     setBusquedaProd("");
   }
@@ -3702,7 +3720,7 @@ function ModuloPresupuestos({presupuestos=[],productos=[],onAprobar,onCancelar,o
                     {editItems.map(it=>(
                       <div key={it.productoId} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",background:G.sup2,borderRadius:8}}>
                         <div style={{flex:1,minWidth:0,fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.nombre}</div>
-                        <input type="number" value={it.cantidad} min="1" onChange={e=>{const n=parseInt(e.target.value)||1;setEditItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,cantidad:Math.max(1,n)}:i));}}
+                        <input type="number" value={it.cantidad} min="1" onChange={e=>{const n=parseInt(e.target.value)||1;const cant=Math.max(1,n);setEditItems(prev=>prev.map(i=>{if(i.productoId!==it.productoId)return i;const pr=productos.find(pp=>pp.id===i.productoId);return{...i,cantidad:cant,precio:pr?precioPorCantidad(pr,cant,pr.precio_min||0):i.precio};}));}}
                           style={{width:52,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 6px",color:G.texto,fontSize:12,textAlign:"center"}}/>
                         <input type="number" value={it.precio} onChange={e=>setEditItems(prev=>prev.map(i=>i.productoId===it.productoId?{...i,precio:parseFloat(e.target.value)||0}:i))}
                           style={{width:88,background:G.sup,border:`1px solid ${G.borde}`,borderRadius:6,padding:"5px 6px",color:G.texto,fontSize:12,textAlign:"right"}}/>
@@ -5533,6 +5551,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
   const [fProv,setFProv]=useState("");
   const [fIva,setFIva]=useState("21"); const [fDescProv,setFDescProv]=useState("0");
   const [fGranelId,setFGranelId]=useState(""); const [fConsumoGranel,setFConsumoGranel]=useState("");
+  const [fDesc5u,setFDesc5u]=useState("0"); const [fDesc10u,setFDesc10u]=useState("0");
   const [loading,setLoading]=useState(false);
 
   // Calcular precios en tiempo real. Si el producto es USD, el costo en ARS que se guarda y
@@ -5563,7 +5582,7 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     const confirmado = window.confirm(`¿Sincronizar TODOS los productos de Pilar a Caamaño?\n\nEsto actualizará nombre, categoría, precios, costos, % ganancia, activo y demás campos en Caamaño.\nEl stock de Caamaño NO se toca.\n\nPuede tardar unos minutos.`);
     if(!confirmado) return;
     setSincronizando(true);
-    const CAMPOS_REPLICAR = ["nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock_min","proveedor","activo","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo"];
+    const CAMPOS_REPLICAR = ["nombre","categoria","marca","costo","costo_usd","precio_min","precio_esp","precio_may","stock_min","proveedor","activo","moneda","ganancia_min","ganancia_may","iva_pct","mostrar_siempre_en_catalogo","descuento_5u","descuento_10u"];
     let ok=0, errores=0;
     for(const prod of productos){
       if(!prod.codigo) continue;
@@ -5802,12 +5821,14 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
     setFDescProv(String(p.descuento_proveedor||0));
     setFGranelId(p.granel_id?String(p.granel_id):"");
     setFConsumoGranel(p.consumo_granel?String(p.consumo_granel):"");
+    setFDesc5u(String(p.descuento_5u||0));setFDesc10u(String(p.descuento_10u||0));
     setModal(true);
   }
   function abrirNuevo(){
     setEditando(null);setFK("");setFN("");setFCat(CATEGORIAS[0]);setFMon("ARS");
     setFCosto("");setFCostoUsd("");setFMc("");setFGanMin("");setFGanMay("");setFStock("");setFStockMin("");
-    setFProv("");setFIva("21");setFDescProv("0");setFGranelId("");setFConsumoGranel("");setModal(true);
+    setFProv("");setFIva("21");setFDescProv("0");setFGranelId("");setFConsumoGranel("");
+    setFDesc5u("0");setFDesc10u("0");setModal(true);
   }
 
   // Validacion codigo duplicado en tiempo real
@@ -5830,7 +5851,9 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
       iva_pct:parseFloat(fIva)||21,
       descuento_proveedor:parseFloat(fDescProv)||0,
       granel_id:fGranelId?parseInt(fGranelId):null,
-      consumo_granel:parseFloat(fConsumoGranel)||0
+      consumo_granel:parseFloat(fConsumoGranel)||0,
+      descuento_5u:parseFloat(fDesc5u)||0,
+      descuento_10u:parseFloat(fDesc10u)||0
     };
     await onGuardar(datos,editando?.id||null);
     setLoading(false);setModal(false);
@@ -6766,6 +6789,13 @@ function ModuloProductos({productos,onGuardar,onEliminar,proveedores,ventas=[],e
               </div>
             )}
             <Div/>
+            {/* Descuento escalonado por cantidad */}
+            <ST>Descuento escalonado por cantidad (opcional)</ST>
+            <div style={{fontSize:11,color:G.textoSec,marginTop:-6}}>Para vender el mismo producto más barato cuando el cliente lleva cantidad, sin necesidad de crear productos aparte. Se aplica automáticamente en Nueva Venta y Presupuestos según la cantidad cargada, sobre el precio de lista que corresponda (minorista/especial/mayorista). Dejar en 0 para no aplicar.</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Fi label="Descuento de 5 a 9 unidades (%)" value={fDesc5u} onChange={setFDesc5u} type="number" min="0" step="0.1" placeholder="0"/>
+              <Fi label="Descuento de 10 unidades en adelante (%)" value={fDesc10u} onChange={setFDesc10u} type="number" min="0" step="0.1" placeholder="0"/>
+            </div>
             {/* Envasado desde un producto a granel */}
             <ST>Envasado desde un producto a granel (opcional)</ST>
             <div style={{fontSize:11,color:G.textoSec,marginTop:-6}}>Para productos que se envasan de a poco desde un vinner/bidón grande (ej. Cloro 5L sale del vinner "Cloro Liquido x Litro"). Al cargar un ingreso de este producto en Abastecimiento, se descuenta automáticamente del producto a granel elegido.</div>

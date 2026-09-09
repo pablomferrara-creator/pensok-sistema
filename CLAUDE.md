@@ -384,6 +384,21 @@ Pablo detectó un hueco real en "🛒 Reporte de compra" (`calcularRecompra` en 
 - La tabla del modal y el HTML/PDF exportado marcan con un badge **"♻ +envasado"** al lado del nombre cuando una línea incluye demanda indirecta, para que quede claro por qué se está sugiriendo pedir eso.
 - No toca nada de Abastecimiento/Control de Stock — es solo el cálculo de proyección de compra.
 
+## Descuento escalonado por cantidad, por producto (2026-09-09)
+
+Pablo venía resolviendo esto con productos-fantasma: creaba "PASTILLA 200 CAPSULA 5kg", "10kg", etc. solo para tener otro precio según cuánto compraba el cliente — pero esos productos no existen en stock real, así que había que ir a Abastecimiento a mano a "sumar" cada vez que se vendía uno. Ahora es un % configurable en el producto real, que ajusta el precio solo según la cantidad cargada.
+
+- **Columnas nuevas en `productos`**: `descuento_5u`/`descuento_10u` (numeric, default 0). Representan el % de descuento **ya total** (no se suman entre sí) sobre el precio de lista que corresponda (minorista/especial/mayorista, según `tipoCliente`/`tipoLista`): 1 a 4 unidades sin descuento, 5 a 9 unidades `descuento_5u`%, 10 unidades en adelante `descuento_10u`% (sin tope superior — confirmado con Pablo que 10-49 es en la práctica "10 o más", ver excepción abajo).
+- **Función módulo-level `precioPorCantidad(producto, cantidad, precioBase)`** (cerca de `getPrecio`/`estadoStock`): elige el % según la cantidad y lo aplica sobre `precioBase`, redondeando al peso (`Math.round`, no a la centena — es un ajuste de precio unitario, no el total de la venta).
+- **Se aplica automáticamente** en:
+  - `ModuloVenta` (Nueva Venta / generar Presupuesto, comparten el mismo carrito): al agregar un producto, al cambiar la cantidad de una línea, y al cambiar el tipo de cliente (recalcula todas las líneas).
+  - `ModuloPresupuestos` → "Editar" un presupuesto pendiente: al agregar un producto y al cambiar cantidad (usa `precio_min` como base, igual que ya hacía ese flujo antes).
+  - En los tres casos el precio de la línea **sigue siendo editable a mano** después — igual que ya pasaba con el precio "sugerido" por tipo de cliente, no es un campo bloqueado.
+- **Convive con el descuento general del carrito** (campo "Descuento" %): se acumulan — el precio unitario ya baja solo por cantidad, y si además se carga un % de descuento general, se aplica sobre el total ya con esa rebaja (a pedido explícito de Pablo).
+- **Se carga por producto** desde Productos → editar → nueva sección "Descuento escalonado por cantidad (opcional)", dos campos (5-9u / 10u+). En 0 no hace nada — no rompe ningún producto existente.
+- **Activado en "PASTILLA 200 CAPSULA" (código G04, ambos locales)**: 5% (5-9u) / 10% (10u en adelante).
+- **Excepción explícita, NO tocar**: "PASTILLA 200 CAPSULA 50kg" (G0450) se vende como cuñete cerrado — es una unidad de venta distinta, no una cantidad de G04. Pablo pidió dejarlo tal cual, fuera de este sistema. Los productos-fantasma "5kg"/"10kg" también se dejan como están por ahora (no se desactivaron) — a criterio de Pablo cuándo dejar de usarlos.
+
 ## Control de Stock: tabla del detalle ordenable, para priorizar las mayores diferencias (2026-09-08)
 
 A pedido de Pablo, para poder revisar los productos con más diferencia antes de aplicar un ajuste (en vez de leer la lista entera de arriba a abajo).
